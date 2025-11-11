@@ -23,7 +23,8 @@ services:
             $mentaUser: '%env(MENTA_USER)%'
             $mentaPassword: '%env(MENTA_PASSWORD)%'
             $mentaApiUrl: '%env(MENTA_API_URL)%'
-
+            $phpBinPath: '%env(PHP_BIN_PATH)%'
+            
     App\Service\DateService:
         arguments:
             $projectLegacyDir: '%env(PHP_PROCESS_PATH)%'

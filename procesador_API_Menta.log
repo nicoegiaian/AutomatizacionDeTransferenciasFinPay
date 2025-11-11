@@ -1,0 +1,41 @@
+============================================
+== PROCESO INICIADO: 2025-11-10 09:40:09 ==
+============================================
+
+INFO: Procesando transacciones para la fecha: 081125
+INFO: Rango de búsqueda: 2025-11-08T00:00:00Z -> 2025-11-08T23:59:59Z
+============================================
+== INICIANDO PROCESO DE TRANSACCIONES MENTA ==
+============================================
+
+--- FASE 1: Autenticación ---
+INFO: Usando token válido desde caché.
+
+--- FASE 2: Petición de Transacciones ---
+INFO: Solicitando página 0...
+EXITO: Se obtuvieron 11 transacciones de la página 0.
+       (Página 1 de 1. Total acumulado: 11)
+
+--- FIN FASE 2: Se obtuvieron un total de 11 transacciones. ---
+
+--- FASE 3: Mapeo a Clases ---
+EXITO: Se mapearon 11 objetos Transaccion.
+
+--- FASE 5: Generación de Archivos de Salida ---
+Cálculo de extensión de archivo...
+Fecha para Extensión calculada: 10-11-2025
+Extensión de archivo calculada: B10
+Generando archivo 'archivocuotas.xlsx'...
+Archivo 'archivocuotas.xlsx' generado con 11 registros.
+
+--- Lote #1 para Fecha Proceso 08-11-2025 ---
+    -> Generando archivo: archivos/A065BOTON081125.B10
+    -> Archivo generado con 11 registros de transacciones en status APPROVED.
+    -> Generando archivo A065DEVBOTON...
+    -> Archivo archivos/A065DEVBOTON081125.B10 generado con éxito.
+
+
+============================================
+== PROCESO FINALIZADO: 2025-11-10 09:40:09 ==
+== DURACIÓN TOTAL: 0.01 minutos ==
+============================================

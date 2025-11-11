@@ -26,9 +26,10 @@ class OrquestadorTrxCommand extends Command
     private string $mentaUser;
     private string $mentaPassword;
     private string $mentaApiUrl;
+    private string $phpBinPath;
 
     //Aca Symfony provee el servicio Notifier que dispara un corre ante un fallo.
-    public function __construct(Notifier $notifier, string $legacyScriptsPath, DateService $dateService, string $mentaUser, string $mentaPassword, string $mentaApiUrl)
+    public function __construct(Notifier $notifier, string $legacyScriptsPath, DateService $dateService, string $mentaUser, string $mentaPassword, string $mentaApiUrl, string $phpBinPath)
     {
         $this->notifier = $notifier;
         $this->legacyScriptsPath = $legacyScriptsPath;
@@ -36,6 +37,7 @@ class OrquestadorTrxCommand extends Command
         $this->mentaUser = $mentaUser;
         $this->mentaPassword = $mentaPassword;
         $this->mentaApiUrl = $mentaApiUrl;
+        $this->phpBinPath = $phpBinPath;
         parent::__construct();
     }
 
@@ -118,15 +120,21 @@ class OrquestadorTrxCommand extends Command
     {
         $scriptPath = $basePath . $scriptName;
         
-        // Comando para ejecutar el script PHP (asumiendo que los scripts antiguos leen $argv[1])
-        $commandLine = ['php', $scriptPath, $fechaParam];
+        // CORRECCIÓN: Usar la ruta absoluta del binario de PHP 8.2 (inyectada desde .env.test)
+        // Antes: $commandLine = ['php', $scriptPath, $fechaParam];
+        $commandLine = [
+            $this->phpBinPath, // <--- ¡FORZAMOS PHP 8.2, ya que indicando solo PHP , usamos la default definida en Hostinger donde levantaba la 8.1.27
+            $scriptPath,
+            $fechaParam
+        ];
 
         $output->writeln("-> Llamando a {$scriptName} con fecha: {$fechaParam}");
         
         $process = new Process($commandLine);
         $process->setWorkingDirectory($basePath);
+        
+        // Las variables de entorno para el proceso hijo (legacy) se mantienen
         $process->setEnv([
-            // El script hijo espera estas variables en el ENTORNO
             'MENTA_USER' => $this->mentaUser,
             'MENTA_PASSWORD' => $this->mentaPassword,
             'MENTA_API_URL' => $this->mentaApiUrl,
@@ -137,16 +145,14 @@ class OrquestadorTrxCommand extends Command
 
         // El proceso falla si el script antiguo terminó con exit(1) o si hubo error de sistema
         if (!$process->isSuccessful()) {
+            // ... (rest of the error handling)
             $output->writeln("<error>¡FALLO en {$scriptName}!</error>");
-            
-            // Llamada a handleFailure para notificar por correo
             $this->handleFailure($output, $scriptName, $process); 
-
-            return false; // El script falló
+            return false;
         }
         
         $output->writeln("<comment>{$scriptName} terminado OK.</comment>");
-        return true; // El script fue exitoso
+        return true;
     }
 
     // Método privado para manejar el fallo y la notificación
