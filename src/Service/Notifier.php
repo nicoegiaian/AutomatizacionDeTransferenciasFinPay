@@ -14,6 +14,7 @@ class Notifier
     private int $port;
     private string $encryption;
     private string $destination;
+    private array $destinations;
 
 
     public function __construct(
@@ -30,12 +31,12 @@ class Notifier
         $this->password = $MAIL_PASSWORD;
         $this->port = $MAIL_PORT;
         $this->encryption = $MAIL_ENCRYPTION;
-        $this->destination = $MAIL_DESTINATION;
+        $this->destinations = array_map('trim', explode(',', $MAIL_DESTINATION));
     }
 
     public function getDestination(): string
     {
-        return $this->destination;
+        return implode(', ', $this->destinations);
     }
     /**
      * Envía un correo de notificación de fallo usando PHPMailer.
@@ -65,7 +66,11 @@ class Notifier
 
             // Remitente y Destinatario
             $mail->setFrom($this->username, 'Orquestador FinPay');
-            $mail->addAddress($this->destination);
+            foreach ($this->destinations as $address) {
+                if (filter_var($address, FILTER_VALIDATE_EMAIL)) {
+                    $mail->addAddress($address);
+                }
+            }
             
             // Contenido
             $mail->isHTML(false); // Enviamos texto plano
