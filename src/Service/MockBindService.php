@@ -19,11 +19,19 @@ class MockBindService implements BindServiceInterface  // Es buena práctica cre
     {
         // El escenario define el resultado del PULL
         if ($this->scenario === 'PULL_RECHAZADO') {
-            return ['idComprobante' => 'MOCK-' . $referencia, 'estado' => 'RECHAZADO'];
+            return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '3'];
         }
-        
+        if ($this->scenario === 'PULL_PROCESAR') {
+            return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '1'];
+        }
+        if ($this->scenario === 'PULL_CONSULTAR') {
+            return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '4'];
+        }
+        if ($this->scenario === 'PULL_AUDITAR') {
+            return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '5'];
+        }
         // Comportamiento por defecto
-        return ['idComprobante' => 'MOCK-' . $referencia, 'estado' => 'APROBADO'];
+        return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '2'];
     }
 
     // ... (El resto de métodos usa $this->scenario para decidir el resultado)

@@ -18,6 +18,8 @@ class BindService implements BindServiceInterface
     private string $tokenUrl;
     private string $scope;
     private ?string $accessToken = null;
+    private string $cuentaId;   
+    private string $cbuOrigen;  
 
     // Symfony inyecta el HttpClient y las credenciales del .env
     public function __construct(
@@ -25,6 +27,8 @@ class BindService implements BindServiceInterface
         string $BIND_CLIENT_ID, 
         string $BIND_CLIENT_SECRET, 
         string $BIND_API_URL,
+        string $BIND_CUENTA_ID,
+        string $BIND_CBU_ORIGEN,
         string $BIND_DEBIN_SUBSCRIPTION_ID,
         string $BIND_TOKEN_URL,
         string $BIND_SCOPE
@@ -33,6 +37,8 @@ class BindService implements BindServiceInterface
         $this->clientId = $BIND_CLIENT_ID;
         $this->clientSecret = $BIND_CLIENT_SECRET;
         $this->apiUrl = $BIND_API_URL;
+        $this->cuentaId = $BIND_CUENTA_ID;     // <--- Asignación
+        $this->cbuOrigen = $BIND_CBU_ORIGEN;
         $this->debinSubscriptionId = $BIND_DEBIN_SUBSCRIPTION_ID;       
         $this->tokenUrl = $BIND_TOKEN_URL;
         $this->scope = $BIND_SCOPE;
@@ -92,13 +98,11 @@ class BindService implements BindServiceInterface
         
         // Payload específico para el DebinRecurrenteCredito
         $payload = [
-            'moneda' => '032', // Código de moneda para ARS (asumo este código basado en convenciones financieras)
-            'monto' => $monto,
-            'concepto' => 'PAGO_BATERIAS',
-            'referencia' => $referencia,
-            'fechaVencimiento' => (new \DateTime('+1 hour'))->format('Y-m-d H:i:s.v'), // Formato específico de BIND
-            'subscriptionId' => $this->debinSubscriptionId, // <-- CLAVE: El ID de la suscripción
-            // Añadir cualquier otro campo que el endpoint requiera (ej. CBU/CUIL del beneficiario si no está en la suscripción)
+            'cuentaId' => (int) $this->cuentaId, // Integer REQUIRED
+            'cbuOrigen' => $this->cbuOrigen,     // String REQUIRED
+            'importe' => $monto,                 // Double OPTIONAL (pero necesario para nosotros)
+            'referencia' => $referencia,         // String OPTIONAL
+            'idExterno' => $referencia,          // String OPTIONAL (Usamos la referencia para garantizar unicidad)
         ];
 
         // Se usa el endpoint corregido (BIND_API_URL + DEBIN_PULL_ENDPOINT)
@@ -111,6 +115,7 @@ class BindService implements BindServiceInterface
         $statusCode = $response->getStatusCode();
 
         if ($statusCode !== 201 && $statusCode !== 200) {
+            $errorMsg = $data['mensaje'] ?? $data['motivoRechazo'] ?? json_encode($data);
             throw new \RuntimeException("BIND DEBIN PULL Falló ({$statusCode}): " . ($data['mensaje'] ?? json_encode($data)));
         }
 
