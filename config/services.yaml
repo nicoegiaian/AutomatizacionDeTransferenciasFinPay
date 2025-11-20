@@ -3,6 +3,11 @@
 
 # Put parameters here that don't need to change on each machine where the app is deployed
 # https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
+# config/services.yaml (Línea clave que permite la carga)
+imports:
+    - { resource: 'services_*.yaml' } 
+    - { resource: '{%env(resolve:APP_ENV)%}/*.yaml', ignore_errors: true }
+
 parameters:
 
 services:
@@ -13,10 +18,17 @@ services:
 
     # makes classes in src/ available to be used as services
     # this creates a service per class whose id is the fully-qualified class name
+    # Configuración del Subscriber para inyectar el secreto
+              
     App\:
         resource: '../src/'
 
     # Configuración Específica para tu Comando
+    App\EventSubscriber\JwtTokenSubscriber:
+        arguments:
+            # 1. Obtenemos el valor de la variable de entorno JWT_SECRET
+            $jwtSecret: '%env(JWT_SECRET)%'
+            
     App\Command\OrquestadorTrxCommand:
         arguments:
             $legacyScriptsPath: '%env(PHP_PROCESS_PATH)%'
@@ -39,3 +51,16 @@ services:
             $MAIL_DESTINATION: '%env(MAIL_DESTINATION)%'
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
+    # Configuración de BindService
+    App\Service\BindService:
+        arguments:
+            # Autowiring se encarga de HttpClientInterface. 
+            # Mapeamos explícitamente los strings:
+            $BIND_CLIENT_ID: '%env(BIND_CLIENT_ID)%'
+            $BIND_CLIENT_SECRET: '%env(BIND_CLIENT_SECRET)%'
+            $BIND_API_URL: '%env(BIND_API_URL)%'
+            $BIND_DEBIN_SUBSCRIPTION_ID: '%env(BIND_DEBIN_SUBSCRIPTION_ID)%'
+            
+            # Mapeo de los parámetros de autenticación
+            $BIND_TOKEN_URL: '%env(BIND_TOKEN_URL)%'
+            $BIND_SCOPE: '%env(BIND_SCOPE)%'    
