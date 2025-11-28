@@ -1,0 +1,20 @@
+nelmio_api_doc:
+    documentation:
+        info:
+            title: FinPay Transfer API
+            description: API de automatización de transferencias y generación de tokens.
+            version: 1.0.0
+        components:
+            securitySchemes:
+                Bearer:
+                    type: http
+                    scheme: bearer
+                    bearerFormat: JWT
+        security:
+            - Bearer: []
+    areas: # Define qué rutas documentar
+        path_patterns: # Documentar solo rutas que empiecen con /api o /transfers
+            - ^/api
+            - ^/transfers
+
+        

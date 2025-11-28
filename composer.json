@@ -7,23 +7,26 @@
         "php": ">=8.2",
         "ext-ctype": "*",
         "ext-iconv": "*",
-        "doctrine/dbal": "*",
-        "doctrine/doctrine-bundle": "*",
-        "firebase/php-jwt": "^6.11",
-        "phpmailer/phpmailer": "^7.0",
+        "doctrine/dbal": ">=4.3.4",
+        "doctrine/doctrine-bundle": ">=2.18.1",
+        "firebase/php-jwt": "^6.11.1",
+        "nelmio/api-doc-bundle": "^5.8",
+        "phpmailer/phpmailer": "^7.0.1",
+        "symfony/asset": "7.3.*",
         "symfony/console": "7.3.*",
         "symfony/doctrine-bridge": "7.3.*",
         "symfony/dotenv": "7.3.*",
-        "symfony/flex": "^2",
+        "symfony/flex": "^2.10",
         "symfony/framework-bundle": "7.3.*",
         "symfony/http-client": "7.3.*",
-        "symfony/monolog-bundle": "^3.10",
+        "symfony/monolog-bundle": "^3.11",
         "symfony/process": "7.3.*",
         "symfony/runtime": "7.3.*",
-        "symfony/yaml": "7.3.*"
+        "symfony/yaml": "7.3.*",
+        "zircote/swagger-php": "^4.11.1"
     },
     "require-dev": {
-        "symfony/maker-bundle": "^1.64"
+        "symfony/maker-bundle": "^1.65"
     },
     "config": {
         "allow-plugins": {
