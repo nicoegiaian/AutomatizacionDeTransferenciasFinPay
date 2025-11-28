@@ -29,12 +29,18 @@ class RegenerateAppSecretCommand extends Command
         // Generación del secreto (usando random_bytes para mejor seguridad)
         try {
             $secret = bin2hex(random_bytes(16)); // 32 caracteres hexadecimales
+            $secret2 = bin2hex(random_bytes(16)); // 32 caracteres hexadecimales
         } catch (\Exception $e) {
             // Fallback si random_bytes falla
             $secret = '';
+            $secret2 = '';
             $a = '0123456789abcdef';
             for ($i = 0; $i < 32; $i++) {
                 $secret .= $a[mt_rand(0, 15)]; 
+            }
+            $b = '0123456789abcdef';
+            for ($i = 0; $i < 32; $i++) {
+                $secret2 .= $b[mt_rand(0, 15)]; 
             }
         }
         
@@ -64,7 +70,21 @@ class RegenerateAppSecretCommand extends Command
             $filesystem->dumpFile($envPath, $newContent);
         }
 
-        $io->success('New APP_SECRET was generated: ' . $secret);
+        $newContent2 = preg_replace(
+            '/^JWT_SECRET=.+$/m', // La 'm' al final asegura que ^ y $ coincidan con el inicio/fin de línea
+            "JWT_SECRET=$secret2",
+            $content
+        );
+
+        if ($newContent === null || $newContent === $content) {
+             $io->warning('No se pudo encontrar o reemplazar la línea JWT_SECRET en .env. Por favor, revísalo manualmente.');
+             // Aunque no se reemplace, podrías querer continuar si el archivo está corrupto
+        } else {
+             // 3. Escribir el nuevo contenido de vuelta al archivo
+            $filesystem->dumpFile($envPath, $newContent2);
+        }
+
+        $io->success('New APP_SECRET and JWT_SECRET was generated: ' . $secret);
         
         return 0;
     }

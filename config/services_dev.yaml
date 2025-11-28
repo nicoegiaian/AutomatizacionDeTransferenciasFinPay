@@ -1,0 +1,15 @@
+# config/services_dev.yaml (o services_test.yaml)
+
+parameters:
+    bind.scenario.current: '%env(BIND_SCENARIO)%'
+
+services:
+    # 1. Definimos el mock service
+    App\Service\MockBindService:
+        # Aquí puedes definir una variable de entorno para forzar un escenario
+        arguments:
+            $scenario: '%bind.scenario.current%'
+            
+    # 2. Sobrescribimos el BindService real
+    #App\Service\BindService: '@App\Service\MockBindService'
+    #App\Service\BindServiceInterface: '@App\Service\MockBindService'
