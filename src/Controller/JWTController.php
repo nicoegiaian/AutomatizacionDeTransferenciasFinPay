@@ -8,7 +8,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
 use Firebase\JWT\JWT;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
-use OpenApi\Attributes as OA; // <--- Importamos los atributos de OpenAPI
+use OpenApi\Attributes as OA; 
 
 class JWTController extends AbstractController
 {
@@ -63,7 +63,7 @@ class JWTController extends AbstractController
     public function getToken(Request $request): JsonResponse
     {
         // 1. Validar Header de Seguridad
-        $apiKeyReceived = $request->headers->get('COBROSFELX-AUTH-KEY');
+        $apiKeyReceived = $request->headers->get('COBROSFLEX-AUTH-KEY');
 
         if ($apiKeyReceived !== $this->generationPass) {
             return $this->json([

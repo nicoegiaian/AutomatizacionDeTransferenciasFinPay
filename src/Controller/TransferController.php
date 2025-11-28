@@ -16,7 +16,14 @@ class TransferController extends AbstractController
 {
     // Usamos el atributo #[Route] para definir el endpoint (la URL)
     #[Route('/transfers/execute', name: 'app_execute_transfer', methods: ['POST'])]
-    #[OA\Tag(name: 'Transferencias')] // Agrupa en la UI
+    #[OA\Tag(name: 'Transferencias')]
+    
+    #[OA\Post(
+        summary: "Ejecutar proceso de liquidación",
+        description: "Inicia el proceso de transferencias masivas. Requiere Token JWT.",
+        security: [['Bearer' => []]] 
+    )]
+
     #[OA\RequestBody(
         description: "Datos para iniciar la liquidación",
         required: true,
