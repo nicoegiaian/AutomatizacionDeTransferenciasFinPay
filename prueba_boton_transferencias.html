@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Prueba de Botón Transferir</title>
+</head>
+<body>
+    <h2>Simulador CobrosFlex</h2>
+    <button id="btnTransferir" style="padding: 20px; font-size: 16px;">TRANSFERIR (Obtener Token)</button>
+    
+    <div id="resultado" style="margin-top: 20px; white-space: pre-wrap; background: #f0f0f0; padding: 10px;"></div>
+
+    <script>
+        document.getElementById('btnTransferir').addEventListener('click', async () => {
+            const display = document.getElementById('resultado');
+            display.textContent = "Procesando...";
+
+            // AQUI ES DONDE NECESITAMOS LA URL EXACTA QUE DEFINIREMOS CON TUS RESPUESTAS
+            // Por ahora asumo la estructura de carpetas cruda:
+            const urlBackend = 'https://pagosdigitales.com.ar/TEST/AutomatizacionDeTransferencias/public/index.php/api/auth/token';
+            
+            try {
+                const response = await fetch(urlBackend, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        // La clave maestra que definimos en el .env
+                        'COBROSFLEX-AUTH-KEY': 'arpasalfilcuna' 
+                    }
+                });
+
+                const data = await response.json();
+                display.textContent = JSON.stringify(data, null, 2);
+                
+                if(response.ok) {
+                    display.style.border = "2px solid green";
+                } else {
+                    display.style.border = "2px solid red";
+                }
+
+            } catch (error) {
+                display.textContent = "Error de conexión (Posible CORS o URL mal formada): " + error.message;
+                display.style.border = "2px solid red";
+            }
+        });
+    </script>
+</body>
+</html>
