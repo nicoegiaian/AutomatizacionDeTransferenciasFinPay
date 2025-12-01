@@ -2,45 +2,107 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Prueba de Botón Transferir</title>
+    <title>Prueba Completa FinPay</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .step { margin-bottom: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .success { border-color: green; background-color: #e8f5e9; }
+        .error { border-color: red; background-color: #ffebee; }
+        button { padding: 10px 20px; cursor: pointer; }
+        pre { background: #f0f0f0; padding: 10px; overflow-x: auto; }
+    </style>
 </head>
 <body>
-    <h2>Simulador CobrosFlex</h2>
-    <button id="btnTransferir" style="padding: 20px; font-size: 16px;">TRANSFERIR (Obtener Token)</button>
-    
-    <div id="resultado" style="margin-top: 20px; white-space: pre-wrap; background: #f0f0f0; padding: 10px;"></div>
+    <h1>Simulador de Flujo Completo</h1>
+
+    <div class="step" id="step1">
+        <h3>Paso 1: Obtener Token de Seguridad</h3>
+        <p>Esto llama a <code>/api/auth/token</code> usando la Clave Maestra.</p>
+        <button id="btnGetToken">1. OBTENER TOKEN</button>
+        <div id="resultToken"></div>
+    </div>
+
+    <div class="step" id="step2" style="opacity: 0.5; pointer-events: none;">
+        <h3>Paso 2: Ejecutar Liquidación</h3>
+        <p>Esto llama a <code>/transfers/execute</code> usando el Token JWT del paso 1.</p>
+        
+        <label>Fecha Liquidación (DDMMAA): </label>
+        <input type="text" id="inputFecha" value="281125" placeholder="Ej: 281125">
+        <br><br>
+        <button id="btnExecute">2. EJECUTAR TRANSFERENCIAS</button>
+        <div id="resultExecute"></div>
+    </div>
 
     <script>
-        document.getElementById('btnTransferir').addEventListener('click', async () => {
-            const display = document.getElementById('resultado');
-            display.textContent = "Procesando...";
+        // CONFIGURACIÓN
+        const BASE_URL = 'https://api-test.pagosdigitales.com.ar'; // Ajustado a tu subdominio
+        const API_KEY_MAESTRA = 'arpasalfilcuna'; // Tu clave del .env
 
-            // AQUI ES DONDE NECESITAMOS LA URL EXACTA QUE DEFINIREMOS CON TUS RESPUESTAS
-            // Por ahora asumo la estructura de carpetas cruda:
-            const urlBackend = 'https://api-test.pagosdigitales.com.ar/api/auth/token';
-            
+        let jwtToken = null; // Aquí guardaremos el token para el paso 2
+
+        // --- LÓGICA PASO 1 (TOKEN) ---
+        document.getElementById('btnGetToken').addEventListener('click', async () => {
+            const display = document.getElementById('resultToken');
+            display.innerHTML = "🔄 Conectando...";
+
             try {
-                const response = await fetch(urlBackend, {
+                const response = await fetch(`${BASE_URL}/api/auth/token`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        // La clave maestra que definimos en el .env
-                        'COBROSFLEX-AUTH-KEY': 'arpasalfilcuna' 
+                        'COBROSFLEX-AUTH-KEY': API_KEY_MAESTRA
                     }
                 });
 
                 const data = await response.json();
-                display.textContent = JSON.stringify(data, null, 2);
                 
                 if(response.ok) {
-                    display.style.border = "2px solid green";
+                    jwtToken = data.token; // GUARDAMOS EL TOKEN
+                    display.innerHTML = `<pre style="color:green">Token Recibido: ${jwtToken.substring(0, 30)}...</pre>`;
+                    
+                    // Habilitar Paso 2
+                    document.getElementById('step2').style.opacity = '1';
+                    document.getElementById('step2').style.pointerEvents = 'auto';
                 } else {
-                    display.style.border = "2px solid red";
+                    display.innerHTML = `<pre style="color:red">Error: ${JSON.stringify(data, null, 2)}</pre>`;
                 }
 
             } catch (error) {
-                display.textContent = "Error de conexión (Posible CORS o URL mal formada): " + error.message;
-                display.style.border = "2px solid red";
+                display.innerHTML = `<pre style="color:red">Error Red/CORS: ${error.message}</pre>`;
+            }
+        });
+
+        // --- LÓGICA PASO 2 (EXECUTE) ---
+        document.getElementById('btnExecute').addEventListener('click', async () => {
+            const display = document.getElementById('resultExecute');
+            const fecha = document.getElementById('inputFecha').value;
+            
+            if(!jwtToken) { alert("Falta el token del paso 1"); return; }
+
+            display.innerHTML = "🔄 Procesando Liquidación (Esto puede tardar)...";
+
+            try {
+                const response = await fetch(`${BASE_URL}/transfers/execute`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${jwtToken}` // AQUÍ SE INYECTA EL TOKEN
+                    },
+                    body: JSON.stringify({
+                        "fecha_liquidacion": fecha
+                    })
+                });
+
+                const data = await response.json();
+                
+                if(response.ok) {
+                    display.innerHTML = `<pre style="color:green">ÉXITO:\n${JSON.stringify(data, null, 2)}</pre>`;
+                } else {
+                    display.innerHTML = `<pre style="color:red">FALLO:\n${JSON.stringify(data, null, 2)}</pre>`;
+                }
+
+            } catch (error) {
+                display.innerHTML = `<pre style="color:red">Error de Ejecución: ${error.message}</pre>`;
             }
         });
     </script>

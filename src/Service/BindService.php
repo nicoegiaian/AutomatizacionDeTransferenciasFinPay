@@ -13,13 +13,10 @@ class BindService implements BindServiceInterface
     private string $clientSecret;
     private string $apiUrl;
     private HttpClientInterface $httpClient;
-    private const DEBIN_PULL_ENDPOINT = '/walletentidad-operaciones/v1/api/v1.201/DebinRecurrenteCredito';
-    private const DEBIN_STATUS_ENDPOINT = '/walletentidad-cuenta/v1/api/v1.201/Organizacion/GetDebinPedidoById/';
     private const TRANSFER_ENDPOINT = '/walletentidad-operaciones/v1/api/v1.201/transferir';
     private string $tokenUrl;
     private string $scope;
     private ?string $accessToken = null;
-    private string $cuentaId;   
     private string $cvuOrigen;  
     private bool $enableRealTransfer;
 
@@ -29,7 +26,6 @@ class BindService implements BindServiceInterface
         string $BIND_CLIENT_ID, 
         string $BIND_CLIENT_SECRET, 
         string $BIND_API_URL,
-        string $BIND_CUENTA_ID,
         string $BIND_CVU_ORIGEN,
         string $BIND_TOKEN_URL,
         string $BIND_SCOPE,
@@ -39,7 +35,6 @@ class BindService implements BindServiceInterface
         $this->clientId = $BIND_CLIENT_ID;
         $this->clientSecret = $BIND_CLIENT_SECRET;
         $this->apiUrl = $BIND_API_URL;
-        $this->cuentaId = $BIND_CUENTA_ID;     // <--- Asignación
         $this->cvuOrigen = $BIND_CVU_ORIGEN;
         $this->tokenUrl = $BIND_TOKEN_URL;
         $this->scope = $BIND_SCOPE;
@@ -47,91 +42,6 @@ class BindService implements BindServiceInterface
     }
 
 
-     // El 25/11 se notifica que por posibles demoras para conseguir el ID para operar con DEBIN con frecuencia diaria y de manera automatica, se debe saltear el proceso de pedido de DEBIN, 
-    // por lo que las siguientes 2 funciones "executegetDebinStatusByIdDebinPull", "initiateDebinPull", se comenta por desuso, pero se mantiene en caso de reactivar el circuito.
-   
-    /**
-     * Consulta el estado de un DEBIN previamente iniciado usando su ID de BIND.
-     * Endpoint: GET /.../GetDebinPedidoById/{id}
-     * @param string $debinId El ID (idComprobante) devuelto por BIND.
-     * @return array La respuesta detallada de BIND con el campo 'estado'.
-     * @throws \RuntimeException Si la API responde con un error HTTP.
-     */
-    
-    public function getDebinStatusById(string $debinId): array
-    {
-        $token = $this->getAccessToken(); // Reutiliza el token de autenticación
-        
-        // Se construye la URL completa con el ID
-        $urlEndpoint = $this->apiUrl . self::DEBIN_STATUS_ENDPOINT . $debinId;
-        
-        try {
-            $response = $this->httpClient->request('GET', $urlEndpoint, [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . $token,
-                    'Cache-Control' => 'no-cache', // Recomendado para asegurar datos frescos
-                ]
-            ]);
-
-            $statusCode = $response->getStatusCode();
-            $data = $response->toArray(false); // Usar 'false' para manejar excepciones de forma limpia
-
-            // Manejo de errores HTTP: 400, 401, 404, etc.
-            if ($statusCode !== 200) {
-                $errorTitle = $data['errores'][0]['titulo'] ?? 'Error desconocido';
-                throw new \RuntimeException("BIND Status Falló (HTTP {$statusCode}): " . $errorTitle, $statusCode);
-            }
-            
-            // Si el body de la respuesta indica un error lógico (ej. ID no encontrado)
-            if (isset($data['detalle']) && $data['estado'] === null) {
-                 throw new \RuntimeException("BIND Status Error (ID: {$debinId}): " . $data['detalle'], 404);
-            }
-
-            return $data; // Devuelve el body, que contiene el campo 'estado'
-
-        } catch (\Exception $e) {
-             throw new \RuntimeException("Fallo de comunicación al consultar estado DEBIN: " . $e->getMessage(), $e->getCode(), $e);
-        }
-    }
-   
-        
-    /**
-     * Inicia el DEBIN PULL (Débito Inmediato) usando la Suscripción de Recurrencia activa.
-     * * @param float $monto Monto total a traer desde Banco Galicia.
-     * @param string $referencia Referencia única para este DEBIN.
-     * @return array La respuesta de la API de BIND.
-     */
-    
-    public function initiateDebinPull(float $monto, string $referencia): array
-    {
-        $token = $this->getAccessToken();
-        
-        // Payload específico para el DebinRecurrenteCredito
-        $payload = [
-            'cuentaId' => (int) $this->cuentaId, // Integer REQUIRED
-            'cbuOrigen' => $this->cvuOrigen,     // String REQUIRED
-            'importe' => $monto,                 // Double OPTIONAL (pero necesario para nosotros)
-            'referencia' => $referencia,         // String OPTIONAL
-            'idExterno' => $referencia,          // String OPTIONAL (Usamos la referencia para garantizar unicidad)
-        ];
-
-        // Se usa el endpoint corregido (BIND_API_URL + DEBIN_PULL_ENDPOINT)
-        $response = $this->httpClient->request('POST', $this->apiUrl . self::DEBIN_PULL_ENDPOINT, [
-            'headers' => ['Authorization' => 'Bearer ' . $token],
-            'json' => $payload
-        ]);
-
-        $data = $response->toArray(false);
-        $statusCode = $response->getStatusCode();
-
-        if ($statusCode !== 201 && $statusCode !== 200) {
-            $errorMsg = $data['mensaje'] ?? $data['motivoRechazo'] ?? json_encode($data);
-            throw new \RuntimeException("BIND DEBIN PULL Falló ({$statusCode}): " . ($data['mensaje'] ?? json_encode($data)));
-        }
-
-        return $data;
-    }
-    
 
 
     /**

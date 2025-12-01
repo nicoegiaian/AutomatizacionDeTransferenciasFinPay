@@ -43,7 +43,5 @@ class MockBindService implements BindServiceInterface  // Es buena práctica cre
         ];
     }
     
-    // Métodos viejos (vacíos o con retorno dummy para cumplir interfaz)
-    public function initiateDebinPull(float $monto, string $referencia): array { return []; }
-    public function getDebinStatusById(string $debinId): array { return []; }
+  
 }

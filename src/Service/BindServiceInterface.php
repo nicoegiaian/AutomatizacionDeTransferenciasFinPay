@@ -7,9 +7,7 @@ namespace App\Service;
 interface BindServiceInterface 
 {
     // La firma (nombre y tipos de argumentos/retorno) debe coincidir con BindService.
-    public function initiateDebinPull(float $monto, string $referencia): array;
 
-    public function getDebinStatusById(string $debinId): array;
 
     public function transferToThirdParty(string $cbuDestino, float $monto): array;
 
