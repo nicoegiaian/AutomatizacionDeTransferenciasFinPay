@@ -35,7 +35,6 @@ services:
             $BIND_CLIENT_ID: '%env(BIND_CLIENT_ID)%'
             $BIND_CLIENT_SECRET: '%env(BIND_CLIENT_SECRET)%'
             $BIND_API_URL: '%env(BIND_API_URL)%'
-            $BIND_CUENTA_ID: '%env(BIND_CUENTA_ID)%' 
             $BIND_CVU_ORIGEN: '%env(BIND_CVU_ORIGEN)%'
             $BIND_TOKEN_URL: '%env(BIND_TOKEN_URL)%'
             $BIND_SCOPE: '%env(BIND_SCOPE)%' 
