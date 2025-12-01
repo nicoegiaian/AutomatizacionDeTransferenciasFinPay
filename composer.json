@@ -11,6 +11,7 @@
         "doctrine/doctrine-bundle": ">=2.18.1",
         "firebase/php-jwt": "^6.11.1",
         "nelmio/api-doc-bundle": "^5.8",
+        "nelmio/cors-bundle": "*",
         "phpmailer/phpmailer": "^7.0.1",
         "symfony/asset": "7.3.*",
         "symfony/console": "7.3.*",
