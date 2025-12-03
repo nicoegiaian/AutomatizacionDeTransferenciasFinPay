@@ -68,12 +68,13 @@ class TransferController extends AbstractController
 
         try {
             // 2. Aquí llamamos al TransferManager Service 
-            $transferManager->executeTransferProcess($fechaLiquidacionDDMMAA);
-            
+            $resultado = $transferManager->executeTransferProcess($fechaLiquidacionDDMMAA);
+
             // 3. Devolvemos la respuesta
             return $this->json([
                 'status' => 'success', 
-                'message' => 'Proceso de liquidación y transferencias iniciado desde el Front.'
+                'message' => 'Proceso de liquidación y transferencias iniciado desde el Front.',
+                'data' => $resultado 
             ]);
 
         } catch (\Exception $e) {

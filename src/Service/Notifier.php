@@ -5,6 +5,7 @@ namespace App\Service;
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
+use Psr\Log\LoggerInterface;
 
 class Notifier
 {
@@ -15,7 +16,7 @@ class Notifier
     private string $encryption;
     private string $destination;
     private array $destinations;
-
+    private LoggerInterface $logger;
 
     public function __construct(
         string $MAIL_HOST,
@@ -23,7 +24,8 @@ class Notifier
         string $MAIL_PASSWORD,
         int $MAIL_PORT,
         string $MAIL_ENCRYPTION,
-        string $MAIL_DESTINATION
+        string $MAIL_DESTINATION,
+        LoggerInterface $finpaySettlementLogger
     ) {
         // Mapeamos las variables inyectadas a propiedades internas
         $this->host = $MAIL_HOST;
@@ -32,6 +34,7 @@ class Notifier
         $this->port = $MAIL_PORT;
         $this->encryption = $MAIL_ENCRYPTION;
         $this->destinations = array_map('trim', explode(',', $MAIL_DESTINATION));
+        $this->logger = $finpaySettlementLogger;
     }
 
     public function getDestination(): string
@@ -64,7 +67,7 @@ class Notifier
             
             $mail->Port       = $this->port;
             $mail->CharSet    = 'UTF-8';
-
+            
             // Remitente y Destinatario
             $mail->setFrom($this->username, 'Orquestador FinPay');
             foreach ($this->destinations as $address) {
@@ -81,13 +84,14 @@ class Notifier
             $mail->isHTML(false); // Enviamos texto plano
             $mail->Subject = $subject;
             $mail->Body    = $body;
-            
+            //$this->logger->info(print_r($mail, true));
             $mail->send();
             return true;
         } catch (Exception $e) {
             // Este error significa que el *envío* del correo falló. 
             // Lo ideal es registrar esto también en el log del sistema.
-            error_log("PHPMailer Error de envío: {$mail->ErrorInfo} | Excepción: {$e->getMessage()}");
+            $errorMsg = "FALLO ENVIO MAIL: " . $mail->ErrorInfo;
+            $this->logger->error($errorMsg);
             return false;
         }
     }

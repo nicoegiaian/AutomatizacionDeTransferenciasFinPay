@@ -35,7 +35,7 @@ class TransferManager
     /**
      * Ejecuta el proceso de transferencia PUSH a todos los PDVs pendientes.
      */
-    public function executeTransferProcess(string $fechaLiquidacionDDMMAA): void
+    public function executeTransferProcess(string $fechaLiquidacionDDMMAA): array
     {
         $estadoExito = $this->enableRealTransfer ? 'COMPLETED' : 'AUDIT_COMPLETED';
         // 0. LIMPIEZA DE LOG (Overwriting)
@@ -48,6 +48,12 @@ class TransferManager
         ignore_user_abort(true);    // Seguir aunque el usuario cierre el navegador
 
         $fechaSQL = \DateTime::createFromFormat('dmy', $fechaLiquidacionDDMMAA)->format('Y-m-d');
+
+        $resultadoDetallado = [
+            'pdvs' => [],
+            'fabricante' => null,
+            'info_adicional' => null // (Opcional) Para mensajes de aviso
+        ];
 
         $this->logger->info("=== INICIO PROCESO DE LIQUIDACIÓN ===");
         $this->logger->info("=== INICIO LOTE: $fechaLiquidacionDDMMAA");
@@ -75,7 +81,9 @@ class TransferManager
             if ($data['total_monto'] <= 0) {
                 $this->logger->info("Sin montos pendientes. Cerrando lote.");
                 $this->closeLote($loteId, 'COMPLETED', 0, 0, 0);
-                return;
+                $resultadoDetallado['info_adicional'] = "No se encontraron montos pendientes para la fecha $fechaLiquidacionDDMMAA.";
+                
+                return $resultadoDetallado;
             }
 
             // Actualizamos el lote con los montos calculados
@@ -103,12 +111,19 @@ class TransferManager
                 // Marcamos como error, enviamos mail y detenemos, porque no se pagará nada.
                 $this->closeLote($loteId, 'ERROR');
                 $this->notifier->sendFailureEmail("Error Datos Faltantes $fechaLiquidacionDDMMAA", $msg);
-                return;
+                $resultadoDetallado['info_adicional'] = $msg;
             }
             $this->logger->info("Iniciando transferencias a $totalPdvs Puntos de Venta...");
 
 
             foreach ($pdvs as $pdv) {
+                $detallePdv = [
+                    'razonsocial' => $pdv['razonsocial'], 
+                    'monto' => $pdv['monto'],
+                    'cbu_destino' => $pdv['cbu'],
+                    'cbu_origen' => $_ENV['BIND_CVU_ORIGEN'] ?? 'N/A', // Leemos del entorno
+                    'estado' => 'PENDIENTE'
+                ];
                 try {
                     $this->logger->info("Procesando PDV ID: {$pdv['idpdv']} - Monto: {$pdv['monto']} - CBU: {$pdv['cbu']}");
                     
@@ -123,6 +138,8 @@ class TransferManager
                     
                     $this->logger->info("    OK. Bind ID: $bindId | Coelsa: " . ($coelsaId ?? 'N/A'));
 
+                    $detallePdv['estado'] = 'ENVIADA';
+
                 } catch (\App\Exception\DryRunException $e) {
                     // CASO DRY RUN (Simulacro)
                     $separador = str_repeat('-', 50);
@@ -131,8 +148,8 @@ class TransferManager
                                       $separador . "\n" . 
                                       $e->getMessage() . "\n" . // Aquí viene el JSON formateado
                                       $separador . "\n";
-                    file_put_contents($this->logFilePath, $mensajeLegible, FILE_APPEND);                  
-                    
+                    file_put_contents($this->logFilePath, $mensajeLegible, FILE_APPEND);    
+                                                  
                     // Marcamos con estado AUDIT_COMPLETED y procesada = false (0)
                     // Nota: Necesitas adaptar updateTransactionStatus para recibir el flag 'procesada'
                     $this->updateTransactionStatus(
@@ -142,25 +159,34 @@ class TransferManager
                         null, 
                         false // <--- NO MARCAR COMO PROCESADA
                     );
+                    $detallePdv['estado'] = 'SIMULADA (DRY RUN)';
 
                 } catch (\Exception $e) {
                     $errores++;
                     $this->logger->error("    FALLO PDV {$pdv['idpdv']}: " . $e->getMessage());
                     // Opcional: Marcar transacciones como ERROR_TRANSFERENCIA en BD
                     $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '');
-
+                    $detallePdv['estado'] = 'ERROR: ' . $e->getMessage();
                 }
+                $resultadoDetallado['pdvs'][] = $detallePdv;
             }
             
             // Pago a Fabricante
             if ($data['monto_fabricante'] > 0) {
                 try {
                     $cbuFab = $_ENV['BIND_CBU_FABRICANTE']; 
+                    $detalleFab = [
+                        'razonsocial' => 'Baterías Moura', // Hardcodeado o parametrizable
+                        'monto' => $data['monto_fabricante'],
+                        'cbu_destino' => $cbuFab,
+                        'cbu_origen' => $_ENV['BIND_CVU_ORIGEN'] ?? 'N/A',
+                        'estado' => 'PENDIENTE'
+                    ];
                     $this->logger->info("Procesando FABRICANTE - Monto: {$data['monto_fabricante']} - CBU: $cbuFab");
                     
                     $resFab = $this->bindService->transferToThirdParty($cbuFab, $data['monto_fabricante']);
                     $this->logger->info("-> Transferencia Fabricante OK.");
-                
+                    $detalleFab['estado'] = 'ENVIADA';
                 } catch (\App\Exception\DryRunException $e) {
                     // CASO DRY RUN (Simulacro)
                     $separador = str_repeat('-', 50);
@@ -171,13 +197,17 @@ class TransferManager
                                     $separador . "\n";
 
                     file_put_contents($this->logFilePath, $mensajeLegible, FILE_APPEND);
-
+                    $detalleFab['estado'] = 'SIMULADA (DRY RUN)';
                 } catch (\Exception $e) {
                     $errores++;
                     $this->logger->error("-> FALLO FABRICANTE: " . $e->getMessage());
+                    $detalleFab['estado'] = 'ERROR: ' . $e->getMessage();
                 }
+                $resultadoDetallado['fabricante'] = $detalleFab;
+
             } else {
                 $this->logger->info("Monto Fabricante es 0 o negativo. No se realiza transferencia.");
+                $resultadoDetallado['fabricante'] = 'Sin monto pendiente';
             }
             
 
@@ -195,6 +225,7 @@ class TransferManager
                     $this->logFilePath
                 );
             }
+            return $resultadoDetallado; // <--- RETORNAMOS EL ARRAY
 
         } 
         catch (\Exception $e) {
@@ -292,6 +323,7 @@ class TransferManager
         $query = "
             SELECT 
                 p.id AS idpdv,
+                p.razonsocial,
                 p.cbu AS cbuDestino,
                 -- 1. Monto para Puntos de Venta
                 SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS total_monto,
@@ -311,7 +343,7 @@ class TransferManager
                 )
             AND DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 0
-            GROUP BY p.id, p.cbu
+            GROUP BY p.id, p.cbu, p.razonsocial
         ";
         
         $result = $this->dbConnection->executeQuery($query, ['fecha' => $fechaSQL]);
@@ -320,6 +352,7 @@ class TransferManager
         foreach ($result->fetchAllAssociative() as $row) {
             $transfers[] = [
                 'idpdv' => (int) $row['idpdv'],
+                'razonsocial' => $row['razonsocial'],
                 'cbu' => $row['cbuDestino'],
                 'monto' => (float) $row['total_monto'],
                 'transacciones_ids' => array_map('intval', explode(',', $row['transacciones_ids_csv']))
