@@ -131,7 +131,7 @@ class TransferManager
                     $this->updateTransactionStatus(
                         $pdv['transacciones_ids'], 
                         'COMPLETED', // Estado para la BD
-                        null, 
+                        'NOT-SEND-ZERO', 
                         null, 
                         true, // Marcar procesada = 1
                         $msgCero // Guardar respuesta en BD (Punto 2)
