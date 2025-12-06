@@ -124,6 +124,23 @@ class TransferManager
                     'cbu_origen' => $_ENV['BIND_CVU_ORIGEN'] ?? 'N/A', // Leemos del entorno
                     'estado' => 'PENDIENTE'
                 ];
+                if ($pdv['monto'] <= 0) {
+                    $msgCero = "OMITIDO AUTOMÁTICAMENTE: El monto es 0 (Split 0-100). Marcado como completado.";
+                    $this->logger->info("    PDV {$pdv['idpdv']} OMITIDO (Monto 0).");
+                    
+                    $this->updateTransactionStatus(
+                        $pdv['transacciones_ids'], 
+                        'COMPLETED', // Estado para la BD
+                        null, 
+                        null, 
+                        true, // Marcar procesada = 1
+                        $msgCero // Guardar respuesta en BD (Punto 2)
+                    );
+
+                    $detallePdv['estado'] = 'OMITIDO (Monto 0)';
+                    $resultadoDetallado['pdvs'][] = $detallePdv;
+                    continue; // Pasamos al siguiente PDV
+                }
                 try {
                     $this->logger->info("Procesando PDV ID: {$pdv['idpdv']} - Monto: {$pdv['monto']} - CBU: {$pdv['cbu']}");
                     
@@ -248,30 +265,30 @@ class TransferManager
         // 1. Consulta el monto total y los IDs de las transacciones tanto para los PDV como para Moura
         $query = "
             SELECT 
-                -- 1. Monto para Puntos de Venta
-                SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS monto_pdv,
-                
-                -- 2. Monto para Fabricante: (Split% Fabricante) - (Subsidio + IVA)
-                -- Nota: Asumimos que el porcentaje del fabricante es el restante (100 - porcentajepdv)
-                SUM(
-                    ROUND((((t.importeprimervenc)*(100 - splits.porcentajepdv))/100), 2) - 
-                    (COALESCE(ld.subsidiomoura, 0) + COALESCE(ld.ivasubsidiomoura, 0))
-                ) AS monto_fabricante,
+            -- 1. Monto para Puntos de Venta (Sin cambios)
+            SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS monto_pdv,
+            
+            -- 2. Monto para Fabricante:
+            -- Lógica: (Suma Total Participación Fabricante) - (Suma Total Subsidios * 1.21)
+            ROUND(
+                SUM(ROUND((((t.importeprimervenc)*(100 - splits.porcentajepdv))/100), 2)) - 
+                (SUM(COALESCE(ld.subsidiomoura, 0)) * 1.21), 
+            2) AS monto_fabricante,
 
-                GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
+            GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
 
             FROM transacciones t
             INNER JOIN splits ON t.idpdv = splits.idpdv
             -- Join con liquidacionesdetalle para obtener subsidios
             LEFT JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
-            
+
             WHERE splits.fecha = 
-                (
-                SELECT MAX(s2.fecha)
-                FROM splits s2
-                WHERE s2.idpdv = t.idpdv 
-                AND s2.fecha <= DATE(t.fechapagobind)
-                )
+            (
+            SELECT MAX(s2.fecha)
+            FROM splits s2
+            WHERE s2.idpdv = t.idpdv 
+            AND s2.fecha <= DATE(t.fechapagobind)
+            )
             AND DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 0  
         ";
@@ -397,6 +414,7 @@ class TransferManager
                     transferencia_estado = :estado, 
                     transferencia_id_bind = :bind_id, 
                     coelsa_id = :coelsa_id, 
+                    respuesta_BIND = :respuesta,
                     fecha_transferencia = NOW()
                 WHERE nrotransaccion IN ({$idsList})
             ";
@@ -406,6 +424,7 @@ class TransferManager
                 'estado' => $estado,
                 'bind_id' => $bindId,
                 'coelsa_id' => $coelsaId,
+                'respuesta' => $respuestaBind
             ]);
         }
         else
@@ -417,6 +436,7 @@ class TransferManager
                     transferencia_estado = :estado, 
                     transferencia_id_bind = :bind_id, 
                     coelsa_id = :coelsa_id, 
+                    respuesta_BIND = :respuesta,
                     fecha_transferencia = NOW()
                 WHERE nrotransaccion IN ({$idsList})
             ";
@@ -426,7 +446,8 @@ class TransferManager
                 'estado' => $estado,
                 'bind_id' => $bindId,
                 'coelsa_id' => $coelsaId,
-            ]);
+                'respuesta' => $respuestaBind
+           ]);
             }
     }
 
