@@ -168,7 +168,6 @@ class TransferManager
                     file_put_contents($this->logFilePath, $mensajeLegible, FILE_APPEND);    
                                                   
                     // Marcamos con estado AUDIT_COMPLETED y procesada = false (0)
-                    // Nota: Necesitas adaptar updateTransactionStatus para recibir el flag 'procesada'
                     $this->updateTransactionStatus(
                         $pdv['transacciones_ids'], 
                         'AUDIT_COMPLETED', 
@@ -182,7 +181,7 @@ class TransferManager
                     $errores++;
                     $this->logger->error("    FALLO PDV {$pdv['idpdv']}: " . $e->getMessage());
                     // Opcional: Marcar transacciones como ERROR_TRANSFERENCIA en BD
-                    $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '');
+                    $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '',0, $e->getMessage());
                     $detallePdv['estado'] = 'ERROR: ' . $e->getMessage();
                 }
                 $resultadoDetallado['pdvs'][] = $detallePdv;
@@ -391,7 +390,7 @@ class TransferManager
      * Actualiza las transacciones con los datos de la transferencia BIND.
      * Se llama después de cada transferencia PUSH individual a un PDV.
      */
-    private function updateTransactionStatus(array $transaccionIds, string $estado, string $bindId, ?string $coelsaId = null, bool $marcarProcesada = true): void
+    private function updateTransactionStatus(array $transaccionIds, string $estado, string $bindId, ?string $coelsaId = null, bool $marcarProcesada = true, ?string $respuestaBind = null): void
     {
         if (empty($transaccionIds)) {
             return;
@@ -402,7 +401,7 @@ class TransferManager
         // Convertir el array de IDs a una lista separada por comas para la clausula IN
         $idsList = implode(', ', $transaccionIds);
         
-        // El estado 'COMPLETADA' (o el que uses para éxito) marca la transacción como finalizada
+        // El estado 'COMPLETADA' marca la transacción como finalizada
         $procesada = ($estado === 'COMPLETADA') ? 1 : 0; 
         
         If ( $procesadaInt == 0)

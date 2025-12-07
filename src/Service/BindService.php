@@ -142,8 +142,8 @@ class BindService implements BindServiceInterface
         
         // Lógica de manejo de errores de BIND
         if ($statusCode !== 201 && $statusCode !== 200) {
-            $errorDetalle = $data['mensaje'] ?? json_encode($data['errores'] ?? $data);
-            throw new \RuntimeException("BIND Transferencia Falló (HTTP $statusCode): " . $errorDetalle);
+            $errorDetalle = $data['mensaje'] ?? $data['errores'][0]['detalle'] ?? json_encode($data['errores'] ?? $data);
+            throw new \RuntimeException($errorDetalle);
         }
 
         return $data;
