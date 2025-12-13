@@ -258,67 +258,95 @@ class TransferManager
 
     /**
      * Obtiene montos y transacciones pendientes para una fecha dada.
+     * Modificado para calcular PDV y Fabricante en dos pasos separados con lógicas distintas.
      */
     private function getPendingTransfersData(string $fechaSQL): array
     {
-        // 1. Consulta el monto total y los IDs de las transacciones tanto para los PDV como para Moura
-        $query = "
+        // ---------------------------------------------------------
+        // PASO 1: Consulta para PUNTOS DE VENTA (Con filtro de no procesadas)
+        // ---------------------------------------------------------
+        $queryPdv = "
             SELECT 
-            -- 1. Monto para Puntos de Venta (Sin cambios)
-            SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS monto_pdv,
-            
-            -- 2. Monto para Fabricante:
-            -- Lógica: (Suma Total Participación Fabricante) - (Suma Total Subsidios * 1.21)
-            ROUND(
-                SUM(ROUND((((t.importeprimervenc)*(100 - splits.porcentajepdv))/100), 2)) - 
-                (SUM(COALESCE(ld.subsidiomoura, 0)) * 1.21), 
-            2) AS monto_fabricante,
-
-            GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
-
+                SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS monto_pdv,
+                GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
             INNER JOIN splits ON t.idpdv = splits.idpdv
-            -- Join con liquidacionesdetalle para obtener subsidios
-            LEFT JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
-
             WHERE splits.fecha = 
-            (
-            SELECT MAX(s2.fecha)
-            FROM splits s2
-            WHERE s2.idpdv = t.idpdv 
-            AND s2.fecha <= DATE(t.fechapagobind)
-            )
+                (
+                SELECT MAX(s2.fecha)
+                FROM splits s2
+                WHERE s2.idpdv = t.idpdv 
+                AND s2.fecha <= DATE(t.fechapagobind)
+                )
             AND DATE(t.fechapagobind) = :fecha 
-            AND t.transferencia_procesada = 0  
+            AND t.transferencia_procesada = 0 
         ";
-        
-        $result = $this->dbConnection->executeQuery($query, ['fecha' => $fechaSQL]);
-        $data = $result->fetchAssociative();
-        /* el siguiente bloque comentado es porque en algun momento me dio error la invocacion como la de arriba y tuve que aclarar el tipo string
-        $stmt = $this->dbConnection->prepare($query);
-        $result = $this->dbConnection->executeQuery($query, 
-        [ 'fecha' => $fechaSQL ],
-        [ 'fecha' => Types::STRING ] // O usa 'string' si Types no está importado
-         );
-        $data = $result->fetchAssociative();
-        */
 
-        // Validar si vino vacío (nulls)
-        if (empty($data['transacciones_ids_csv'])) {
-            return [
+        $resultPdv = $this->dbConnection->executeQuery($queryPdv, ['fecha' => $fechaSQL]);
+        $dataPdv = $resultPdv->fetchAssociative();
+
+        // ---------------------------------------------------------
+        // PASO 2: Consulta para FABRICANTE (Sin filtro de procesadas y cálculo dinámico de subsidio)
+        // ---------------------------------------------------------
+        $queryFab = "
+            SELECT 
+                ROUND(
+                    -- A. Participación del Fabricante (Basado en Splits)
+                    SUM(ROUND((((t.importeprimervenc)*(100 - splits.porcentajepdv))/100), 2)) 
+                    - 
+                    -- B. Descuento: (Suma Importes Cheque * % Subsidio * 1.21 IVA incluido)
+                    (
+                        SUM(t.importecheque) * (
+                            SELECT porcentaje 
+                            FROM porcentajes 
+                            WHERE nombre = 'Subsidio Moura' 
+                            AND fecha <= :fecha 
+                            ORDER BY fecha DESC 
+                            LIMIT 1
+                        ) / 100 * 1.21
+                    )
+                , 2) AS monto_fabricante
+            FROM transacciones t
+            INNER JOIN splits ON t.idpdv = splits.idpdv
+            WHERE splits.fecha = 
+                (
+                SELECT MAX(s2.fecha)
+                FROM splits s2
+                WHERE s2.idpdv = t.idpdv 
+                AND s2.fecha <= DATE(t.fechapagobind)
+                )
+            AND DATE(t.fechapagobind) = :fecha
+        ";
+
+        $resultFab = $this->dbConnection->executeQuery($queryFab, ['fecha' => $fechaSQL]);
+        $dataFab = $resultFab->fetchAssociative();
+
+        // ---------------------------------------------------------
+        // PASO 3: Procesamiento y Unificación de resultados
+        // ---------------------------------------------------------
+
+        // Obtener valores, asegurando 0.0 si vienen null
+        $montoPdv = (float) ($dataPdv['monto_pdv'] ?? 0);
+        $montoFab = (float) ($dataFab['monto_fabricante'] ?? 0);
+
+        // Procesar los IDs de transacciones (Vienen del query de PDV, que es el que marca qué se procesa en este lote)
+        $transaccionIds = [];
+        if (!empty($dataPdv['transacciones_ids_csv'])) {
+            $transaccionIds = array_map('intval', explode(',', $dataPdv['transacciones_ids_csv']));
+        }
+
+        // Si no hay transacciones de PDV pendientes, aunque haya monto fabricante calculado (por recálculo histórico),
+        // el flujo actual depende de que haya IDs para el lote.
+        // Si el montoFab existe pero no hay transacciones nuevas, el total dependerá de tu lógica de negocio.
+        // Aquí asumimos que si no hay transacciones IDs, retornamos arrays vacíos para evitar crear un lote vacío sin transacciones asociadas.
+        if (empty($transaccionIds) && $montoPdv <= 0) {
+             return [
                 'total_monto' => 0.0,
                 'monto_pdv' => 0.0,
-                'monto_fabricante' => 0.0,
+                'monto_fabricante' => 0.0, // Ojo: Si quieres pagar al fabricante aunque no haya ventas nuevas de PDV, quita este bloque.
                 'transacciones_ids' => []
             ];
         }
-
-        $montoPdv = (float) ($data['monto_pdv'] ?? 0);
-        $montoFab = (float) ($data['monto_fabricante'] ?? 0);
-        
-        // El DEBIN debe ser la suma de ambos
-
-        $transaccionIds = array_map('intval', explode(',', $data['transacciones_ids_csv']));
 
         return [
             'total_monto' => $montoPdv + $montoFab,
