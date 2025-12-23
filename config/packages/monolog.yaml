@@ -1,5 +1,5 @@
 monolog:
-    channels: ['finpay_settlement'] # 1. Definimos el canal personalizado
+    channels: ['finpay_settlement', 'mute_automation'] # 1. Definimos el canal personalizado
 
     handlers:
         # ... otros handlers existentes (main, console, etc.) ...
@@ -12,4 +12,11 @@ monolog:
             level: info
             channels: ["finpay_settlement"]
             # Formato simple para fácil lectura
+            formatter: monolog.formatter.line
+
+        mute_automation:
+            type: stream
+            path: "%kernel.logs_dir%/automatizacion_mute.log"
+            level: info
+            channels: ["mute_automation"]
             formatter: monolog.formatter.line

@@ -14,12 +14,13 @@ class BindService implements BindServiceInterface
     private string $apiUrl;
     private HttpClientInterface $httpClient;
     private const TRANSFER_ENDPOINT = '/walletentidad-operaciones/v1/api/v1.201/transferir';
+    private const ACCOUNT_INFO_ENDPOINT = '/walletentidad-cuenta/v1/api/v1.201/CuentaCVUByCbuCvuOrAlias';
     private string $tokenUrl;
     private string $scope;
     private ?string $accessToken = null;
     private string $cvuOrigen;  
     private bool $enableRealTransfer;
-
+    
     // Symfony inyecta el HttpClient y las credenciales del .env
     public function __construct(
         HttpClientInterface $httpClient, 
@@ -41,7 +42,54 @@ class BindService implements BindServiceInterface
         $this->enableRealTransfer = $BIND_ENABLE_REAL_TRANSFER;
     }
 
+    /**
+     * Obtiene el saldo de una cuenta dada su CVU.
+     * @param string $cvu El CVU a consultar.
+     * @return float El saldo disponible.
+     * @throws \RuntimeException Si falla la consulta.
+     */
+    public function getAccountBalance(string $cvu): float
+    {
+        $token = $this->getAccessToken();
+        
+        // La URL se construye concatenando el endpoint al API URL base
+        // Nota: Algunos endpoints de BIND requieren pasar el CVU como query param o en el path.
+        // Basado en 'CuentaCVUByCbuCvuOrAlias', suele ser GET con query param.
+        
+        $url = $this->apiUrl . self::ACCOUNT_INFO_ENDPOINT . '/' . $cvu;
 
+        try {
+            $response = $this->httpClient->request('GET', $url, [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $token,
+                    'Content-Type' => 'application/json'
+                ]
+            ]);
+
+            $statusCode = $response->getStatusCode();
+            $data = $response->toArray(false);
+
+            if ($statusCode !== 200) {
+                 $errorMsg = $data['mensaje'] ?? json_encode($data);
+                 throw new \RuntimeException("Error al consultar saldo en BIND: $errorMsg");
+            }
+
+            // Mapeo de respuesta BIND (Ajustar según respuesta real: suele ser 'saldo' o 'balance')
+            // Asumimos que la respuesta trae el objeto de la cuenta
+            if (isset($data['saldo'])) {
+                return (float) $data['saldo'];
+            }
+             
+            if (isset($data['cuenta']['saldo'])) {
+                return (float) $data['cuenta']['saldo'];
+            }
+
+            throw new \RuntimeException("Campo de saldo no encontrado en respuesta BIND.");
+
+        } catch (\Exception $e) {
+            throw new \RuntimeException("Fallo conexión BIND (Saldo): " . $e->getMessage());
+        }
+    }
 
 
     /**

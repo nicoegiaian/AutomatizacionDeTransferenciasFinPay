@@ -11,5 +11,7 @@ interface BindServiceInterface
 
     public function transferToThirdParty(string $cbuDestino, float $monto): array;
 
+    public function getAccountBalance(string $cvu): float;
+
     // Si hay más métodos públicos usados por TransferManager, deben ir aquí.
 }

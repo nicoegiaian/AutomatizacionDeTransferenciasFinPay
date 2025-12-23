@@ -48,3 +48,18 @@ services:
             $finpaySettlementLogger: '@monolog.logger.finpay_settlement'
             $logFilePath: '%kernel.logs_dir%/transferencias_diarias.log'
             $BIND_ENABLE_REAL_TRANSFER: '%env(bool:BIND_ENABLE_REAL_TRANSFER)%'
+    
+    App\Service\MuteSettlementService:
+        arguments:
+            $bindService: '@App\Service\BindServiceInterface'
+            $notifier: '@App\Service\Notifier'
+            $dbConnection: '@doctrine.dbal.default_connection'
+            $logger: '@monolog.logger.mute_automation'
+            $logFilePath: '%kernel.logs_dir%/automatizacion_mute.log'
+            $cvuOrigen: '%env(MUTE_CVU_ORIGEN)%'
+            $cvuTercero: '%env(MUTE_CVU_TERCERO)%'
+            $cvuPagosDigitales: '%env(MUTE_CVU_PAGOSDIGITALES)%'
+            $comisionPorcentaje: '%env(float:MUTE_COMISION_PORCENTAJE)%'
+            $ivaPorcentaje: '%env(float:MUTE_IVA_PORCENTAJE)%'
+            $emailDestino: '%env(MUTE_EMAIL_DESTINO)%'
+            $enableRealTransfer: '%env(bool:MUTE_ENABLE_REAL_TRANSFER)%'
