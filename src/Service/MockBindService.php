@@ -42,6 +42,12 @@ class MockBindService implements BindServiceInterface  // Es buena práctica cre
             'mensaje' => 'Transferencia Aprobada (Simulación)'
         ];
     }
+    public function getAccountBalance(string $cvu): float
+    {
+        // Retornamos un saldo alto ficticio para que, si se usa, 
+        // no falle por falta de fondos.
+        return 500000.00; 
+    }
     
   
 }
