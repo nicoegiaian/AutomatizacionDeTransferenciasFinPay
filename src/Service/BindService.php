@@ -14,7 +14,7 @@ class BindService implements BindServiceInterface
     private string $apiUrl;
     private HttpClientInterface $httpClient;
     private const TRANSFER_ENDPOINT = '/walletentidad-operaciones/v1/api/v1.201/transferir';
-    private const ACCOUNT_INFO_ENDPOINT = '/walletentidad-cuenta/v1/api/v1.201/CuentaCVUByCbuCvuOrAlias';
+    private const ACCOUNT_INFO_ENDPOINT = '/walletentidad-cuenta/v1/api/v1.201/SaldoActualByCVU';
     private string $tokenUrl;
     private string $scope;
     private ?string $accessToken = null;

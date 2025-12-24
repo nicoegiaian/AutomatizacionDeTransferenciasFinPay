@@ -85,7 +85,7 @@ class MuteSettlementService
 
             $paraPD = round($saldoTotal - $paraTercero, 2);
 
-            $this->logger->info("Distribución Final (2 dec): Tercero: $paraTercero | PD (Resto): $paraPD | Total: " . ($paraTercero + $paraPD));
+            $this->logger->info("Distribución Final (2 decimales): Tercero: $paraTercero | PD (Resto): $paraPD | Total: " . ($paraTercero + $paraPD));
 
             if ($paraPD < 0) {
                 throw new \Exception("Error lógico: El monto calculado para PD es negativo. Revisar configuración.");
