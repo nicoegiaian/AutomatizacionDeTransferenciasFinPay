@@ -151,8 +151,7 @@ class MuteSettlementService
             $this->notifier->sendFailureEmail(
                 $prefijo . "Reporte Diario Mute - " . date('d/m/Y'), 
                 $cuerpoMail, 
-                null, 
-                $this->emailDestino 
+                null
             );
 
             $this->logger->info("Proceso finalizado con ÉXITO.");

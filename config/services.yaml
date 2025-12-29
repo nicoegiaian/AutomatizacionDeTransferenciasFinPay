@@ -25,6 +25,14 @@ services:
             $MAIL_PORT: '%env(int:MAIL_PORT)%'         
             $MAIL_ENCRYPTION: '%env(MAIL_ENCRYPTION)%'
             $MAIL_DESTINATION: '%env(MAIL_DESTINATION)%'
+            $finpaySettlementLogger: '@monolog.logger.finpay_settlement'
+
+    app.notifier.mute:
+        class: App\Service\Notifier
+        parent: App\Service\Notifier 
+        arguments:
+            $MAIL_DESTINATION: '%env(MUTE_EMAIL_DESTINO)%'
+            $finpaySettlementLogger: '@monolog.logger.mute_automation' 
  
     
     App\Service\BindService:
@@ -52,7 +60,7 @@ services:
     App\Service\MuteSettlementService:
         arguments:
             $bindService: '@App\Service\BindServiceInterface'
-            $notifier: '@App\Service\Notifier'
+            $notifier: '@app.notifier.mute'
             $dbConnection: '@doctrine.dbal.default_connection'
             $logger: '@monolog.logger.mute_automation'
             $logFilePath: '%kernel.logs_dir%/automatizacion_mute.log'

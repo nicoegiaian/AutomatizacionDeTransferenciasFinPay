@@ -52,15 +52,6 @@ class Notifier
     public function sendFailureEmail(string $subject, string $body,?string $attachmentPath = null): bool
     {
         
-        // --- INICIO DEBUG TEMPORAL ---
-        echo "\n================ CREDENCIALES CARGADAS =================\n";
-        echo "Usuario: [" . $this->username . "]\n"; 
-        // Mostramos la longitud y los primeros/últimos caracteres para detectar espacios ocultos
-        echo "Password (Longitud): " . strlen($this->password) . "\n"; 
-        echo "Password (Primeros 2): " . substr($this->password, 0, 2) . "\n";
-        echo "Password (Últimos 2): " . substr($this->password, -2) . "\n";
-        echo "========================================================\n";
-        // --- FIN DEBUG TEMPORAL ---
         $mail = new PHPMailer(true);
 
         try {
