@@ -64,10 +64,12 @@ class Notifier
         $mail = new PHPMailer(true);
 
         try {
+            /* Bloque de Debuggin para errores de SMTP 
             $mail->SMTPDebug = SMTP::DEBUG_CONNECTION; // Nivel 3 para ver todo
             $mail->Debugoutput = function($str, $level) {
                 echo "DEBUG SMTP: $str\n"; // Imprimirá en tu consola de VS Code
             };
+            */
             // Configuración SMTP
             $mail->isSMTP();
             $mail->Host       = $this->host;
