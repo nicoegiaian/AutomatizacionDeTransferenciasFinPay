@@ -206,16 +206,43 @@ class MuteSettlementService
         ]);
     }
 
-    private function buildEmailBody($total, $com, $iva, $neto, $tercero, $pd, $ids): string
+    private function buildEmailBody($total, $com, $iva, $neto, $tercero, $pd, $ids): string 
     {
-        return "Resumen de Ejecución Mute:\n\n" .
-               "1. Saldo Total Encontrado: $ " . number_format($total, 4) . "\n" .
-               "------------------------------------------\n" .
-               "2. Comisión ({$this->comisionPorcentaje}%): $ " . number_format($com, 4) . "\n" .
-               "3. IVA Comisión ({$this->ivaPorcentaje}%): $ " . number_format($iva, 4) . "\n" .
-               "4. Monto Neto Calculado: $ " . number_format($neto, 4) . "\n" .
-               "------------------------------------------\n" .
-               "5. Transferido a Tercero (90%): $ " . number_format($tercero, 2) . " (ID: " . ($ids['tercero'] ?? 'N/A') . ")\n" .
-               "6. Transferido a PD (10% + Com + IVA): $ " . number_format($pd, 2) . " (ID: " . ($ids['pd'] ?? 'N/A') . ")\n";
+        // Formateamos los montos para que se vean bien
+        $fTotal = number_format($total, 2);
+        $fCom = number_format($com, 4);
+        $fIva = number_format($iva, 4);
+        $fNeto = number_format($neto, 4);
+        $fTercero = number_format($tercero, 2);
+        $fPD = number_format($pd, 2);
+
+        return "REPORTE DE AUTOMATIZACIÓN MUTE\n" .
+               "Fecha: " . date('d/m/Y H:i:s') . "\n" .
+               "========================================\n\n" .
+               
+               "1. ORIGEN DE FONDOS\n" .
+               "   Cuenta BIND (CVU: {$this->cvuOrigen})\n" .
+               "   Saldo Inicial Encontrado: $ {$fTotal}\n\n" .
+               
+               "2. CÁLCULOS Y DEDUCCIONES\n" .
+               "   ----------------------------------------\n" .
+               "   (-) Comisión ({$this->comisionPorcentaje}%): $ {$fCom}\n" .
+               "   (-) IVA Comisión ({$this->ivaPorcentaje}%):  $ {$fIva}\n" .
+               "   (=) Monto Neto Distribuible: $ {$fNeto}\n\n" .
+               
+               "3. DISTRIBUCIÓN DE FONDOS\n" .
+               "   ----------------------------------------\n" .
+               "   A) TERCERO (90% del Neto)\n" .
+               "      Destino CVU: {$this->cvuTercero}\n" .
+               "      Monto Transferido: $ {$fTercero}\n" .
+               "      ID Operación: " . ($ids['tercero'] ?? 'N/A') . "\n\n" .
+               
+               "   B) PAGOS DIGITALES (Resto: 10% + Coms + IVA)\n" .
+               "      Destino CVU: {$this->cvuPagosDigitales}\n" .
+               "      Monto Transferido: $ {$fPD}\n" .
+               "      ID Operación: " . ($ids['pd'] ?? 'N/A') . "\n\n" .
+               
+               "========================================\n" .
+               "Estado Final Cuenta Origen: $ 0.00 (Teórico)";
     }
 }
