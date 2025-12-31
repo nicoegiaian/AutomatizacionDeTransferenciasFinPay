@@ -99,7 +99,8 @@ class MuteSettlementService
             // -------------------------------------------------------
             // BLOQUE DE DECISIÓN: REAL VS PRUEBA
             // -------------------------------------------------------
-            
+            $cvuOrigenConfirmado = $this->cvuOrigen; 
+
             if ($this->enableRealTransfer) {
                 // --- MODO REAL ---
                 
@@ -114,8 +115,13 @@ class MuteSettlementService
                     );
                     
                     $idsBind['tercero'] = $res1['comprobanteId'] ?? 'ENVIADO';
+                    // CAPTURAMOS EL ORIGEN REAL USADO
+                    if (isset($res1['audit_cvu_origen'])) {
+                        $cvuOrigenConfirmado = $res1['audit_cvu_origen'];
+                        $this->logger->info("Transferencia a Tercero EXITOSA desde: $cvuOrigenConfirmado");
+                    }
                 }
-                
+
                 // Transferencia 2: Pagos Digitales
                 if ($paraPD > 0) {
                     $this->logger->info("Transfiriendo a PagosDigitales ($paraPD) desde {$this->cvuOrigen}...");
@@ -127,6 +133,9 @@ class MuteSettlementService
                     );
                     
                     $idsBind['pd'] = $res2['comprobanteId'] ?? 'ENVIADO';
+                    if (isset($res2['audit_cvu_origen'])) {
+                        $cvuOrigenConfirmado = $res2['audit_cvu_origen'];
+                    }
                 }
 
             } else {
@@ -137,7 +146,7 @@ class MuteSettlementService
 
                 $idsBind['tercero'] = 'SIMULACION'; 
                 $idsBind['pd'] = 'SIMULACION';
-                
+                $cvuOrigenConfirmado = $this->cvuOrigen . ' (Simulado)';
                 // Cambiamos el estado para la BD
                 $estadoFinal = 'AUDIT_COMPLETED';
             }
@@ -154,7 +163,7 @@ class MuteSettlementService
             // 5. Enviar Mail (Se envía en ambos casos para que valides el contenido)
             $prefijo = ($estadoFinal === 'AUDIT_COMPLETED') ? '[PRUEBA] ' : '';
             
-            $cuerpoMail = $this->buildEmailBody($saldoTotal, $montoComision, $montoIva, $montoNeto, $paraTercero, $paraPD, $idsBind);
+            $cuerpoMail = $this->buildEmailBody($saldoTotal, $montoComision, $montoIva, $montoNeto, $paraTercero, $paraPD, $idsBind,$cvuOrigenConfirmado);
             
             if (!$this->enableRealTransfer) {
                 $cuerpoMail = "ATENCIÓN: ESTO ES UN SIMULACRO. NO SE MOVIÓ DINERO.\n\n" . $cuerpoMail;
@@ -217,7 +226,7 @@ class MuteSettlementService
         ]);
     }
 
-    private function buildEmailBody($total, $com, $iva, $neto, $tercero, $pd, $ids): string 
+    private function buildEmailBody($total, $com, $iva, $neto, $tercero, $pd, $ids, string $cvuOrigenReal): string 
     {
         // Formateamos los montos para que se vean bien
         $fTotal = number_format($total, 2);
@@ -232,7 +241,7 @@ class MuteSettlementService
                "========================================\n\n" .
                
                "1. ORIGEN DE FONDOS\n" .
-               "   Cuenta BIND (CVU: {$this->cvuOrigen})\n" .
+               "   Cuenta BIND (CVU: {$cvuOrigenReal})\n" .
                "   Saldo Inicial Encontrado: $ {$fTotal}\n\n" .
                
                "2. CÁLCULOS Y DEDUCCIONES\n" .

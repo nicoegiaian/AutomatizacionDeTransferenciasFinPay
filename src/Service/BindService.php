@@ -193,7 +193,7 @@ class BindService implements BindServiceInterface
             $errorDetalle = $data['mensaje'] ?? $data['errores'][0]['detalle'] ?? json_encode($data['errores'] ?? $data);
             throw new \RuntimeException($errorDetalle);
         }
-
+        $data['audit_cvu_origen'] = $origenAUtilizar;
         return $data;
     }
 }
