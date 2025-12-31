@@ -9,7 +9,7 @@ interface BindServiceInterface
     // La firma (nombre y tipos de argumentos/retorno) debe coincidir con BindService.
 
 
-    public function transferToThirdParty(string $cbuDestino, float $monto): array;
+    public function transferToThirdParty(string $cbuDestino, float $monto, ?string $cvuOrigen = null): array;
 
     public function getAccountBalance(string $cvu): float;
 

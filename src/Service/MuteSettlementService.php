@@ -105,15 +105,27 @@ class MuteSettlementService
                 
                 // Transferencia 1: Tercero
                 if ($paraTercero > 0) {
-                    $this->logger->info("Transfiriendo a Tercero ($paraTercero)...");
-                    $res1 = $this->bindService->transferToThirdParty($this->cvuTercero, $paraTercero);
+                    $this->logger->info("Transfiriendo a Tercero ($paraTercero) desde {$this->cvuOrigen}...");
+                    
+                    $res1 = $this->bindService->transferToThirdParty(
+                        $this->cvuTercero, 
+                        $paraTercero, 
+                        $this->cvuOrigen 
+                    );
+                    
                     $idsBind['tercero'] = $res1['comprobanteId'] ?? 'ENVIADO';
                 }
                 
                 // Transferencia 2: Pagos Digitales
                 if ($paraPD > 0) {
-                    $this->logger->info("Transfiriendo a PagosDigitales ($paraPD)...");
-                    $res2 = $this->bindService->transferToThirdParty($this->cvuPagosDigitales, $paraPD);
+                    $this->logger->info("Transfiriendo a PagosDigitales ($paraPD) desde {$this->cvuOrigen}...");
+                    
+                    $res2 = $this->bindService->transferToThirdParty(
+                        $this->cvuPagosDigitales, 
+                        $paraPD, 
+                        $this->cvuOrigen
+                    );
+                    
                     $idsBind['pd'] = $res2['comprobanteId'] ?? 'ENVIADO';
                 }
 

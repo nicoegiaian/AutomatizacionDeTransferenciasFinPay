@@ -142,30 +142,30 @@ class BindService implements BindServiceInterface
     }
     
     /**
-     * Realiza la transferencia PUSH a un tercero (Punto de Venta).
-     * @param string $cbuDestino CBU/CVU del PDV.
+     * Realiza la transferencia PUSH a un tercero.
+     * @param string $cbuDestino CBU/CVU del destinatario.
      * @param float $monto Monto a transferir.
-     * @return array La respuesta cruda de la API de BIND.
+     * @param string|null $cvuOrigen (Opcional) CVU desde donde salen los fondos. Si es null, usa el default.
      */
-    public function transferToThirdParty(string $cbuDestino, float $monto): array
+    public function transferToThirdParty(string $cbuDestino, float $monto, ?string $cvuOrigen = null): array
     {
         $token = $this->getAccessToken(); // Obtener token
-        
+        $origenAUtilizar = $cvuOrigen ?? $this->cvuOrigen;
         $referencia = 'TRF-' . time() . '-' . rand(1000, 9999);
 
         // Formato requerido por la API: https://psp.bind.com.ar/developers/apis/realizar-una-transferencia
         $payload = [
-            'cvu_Origen' => $this->cvuOrigen,
+            'cvu_Origen' => $origenAUtilizar, 
             'cbu_cvu_destino' => $cbuDestino,
             'importe' => $monto,
             'referencia' => $referencia,
             'concepto' => 'VAR',
-            // ... otros campos requeridos (concepto, referencia, etc.)
         ];
 
         if (!$this->enableRealTransfer) {
             // Empaquetamos todo lo que íbamos a mandar y lanzamos la excepción
             $debugData = [
+                'origen_usado' => $origenAUtilizar, 
                 'url' => $this->apiUrl . self::TRANSFER_ENDPOINT,
                 'token_preview' => substr($token, 0, 10) . '...',
                 'payload' => $payload
