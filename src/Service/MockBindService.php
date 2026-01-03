@@ -16,7 +16,7 @@ class MockBindService implements BindServiceInterface  // Es buena práctica cre
 
     
     // SCENARIO 3: Simulación de Transferencia PUSH Exitosa
-    public function transferToThirdParty(string $cbuDestino, float $monto): array
+public function transferToThirdParty(string $cbuDestino, float $monto, ?string $cvuOrigen = null): array
     {
         // 1. Escenario: ERROR TOTAL (Simula caída de API o rechazo masivo)
         if ($this->scenario === 'PUSH_ERROR') {
