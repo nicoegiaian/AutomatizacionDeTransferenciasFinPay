@@ -13,6 +13,7 @@ class MuteSettlementService
     private Notifier $notifier;
     private Connection $db;
     private LoggerInterface $logger;
+    private LoggerInterface $reportLogger; 
     private string $logFilePath;
 
     private string $cvuOrigen;
@@ -28,6 +29,7 @@ class MuteSettlementService
         Notifier $notifier,
         Connection $dbConnection,
         LoggerInterface $logger,
+        LoggerInterface $reportLogger,
         string $logFilePath,
         string $cvuOrigen,
         string $cvuTercero,
@@ -41,6 +43,7 @@ class MuteSettlementService
         $this->notifier = $notifier;
         $this->db = $dbConnection;
         $this->logger = $logger;
+        $this->reportLogger = $reportLogger; 
         $this->logFilePath = $logFilePath;
         $this->cvuOrigen = $cvuOrigen;
         $this->cvuTercero = $cvuTercero;
@@ -247,7 +250,7 @@ class MuteSettlementService
         
         $nombreMes   = $fechaBase->format('F Y'); // Ej: "November 2025"
 
-        $this->logger->info("Generando reporte mensual para: $nombreMes ($fechaInicio a $fechaFin)");
+        $this->reportLogger->info("Generando reporte mensual para: $nombreMes ($fechaInicio a $fechaFin)");
 
         // 2. Consulta SQL Agregada
         $sql = "SELECT 
@@ -273,7 +276,7 @@ class MuteSettlementService
 
         // Validar si hubo movimientos
         if (!$datos || $datos['cantidad_lotes'] == 0) {
-            $this->logger->info("No se encontraron movimientos exitosos para $nombreMes. Reporte omitido.");
+            $this->reportLogger->info("No se encontraron movimientos exitosos para $nombreMes. Reporte omitido.");
             return;
         }
 
@@ -285,7 +288,7 @@ class MuteSettlementService
         // Usamos el nuevo método HTML del Notifier
         $this->notifier->sendHtmlEmail($asunto, $htmlBody);
         
-        $this->logger->info("Reporte mensual enviado con éxito.");
+        $this->reportLogger->info("Reporte mensual enviado con éxito.");
     }
 
     private function buildMonthlyEmailBody(array $d, string $periodo): string
@@ -353,7 +356,7 @@ class MuteSettlementService
             Este reporte fue generado automáticamente el " . date('d/m/Y H:i:s') . ".
         </p>";
     }
-    
+
     private function buildEmailBody($total, $com, $iva, $neto, $tercero, $pd, $ids, string $cvuOrigenReal): string 
     {
         // Formateamos los montos para que se vean bien

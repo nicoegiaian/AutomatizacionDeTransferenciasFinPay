@@ -63,6 +63,7 @@ services:
             $notifier: '@app.notifier.mute'
             $dbConnection: '@doctrine.dbal.default_connection'
             $logger: '@monolog.logger.mute_automation'
+            $reportLogger: '@monolog.logger.mute_reports' 
             $logFilePath: '%kernel.logs_dir%/automatizacion_mute.log'
             $cvuOrigen: '%env(MUTE_CVU_ORIGEN)%'
             $cvuTercero: '%env(MUTE_CVU_TERCERO)%'
