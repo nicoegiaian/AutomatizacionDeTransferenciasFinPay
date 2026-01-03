@@ -226,6 +226,134 @@ class MuteSettlementService
         ]);
     }
 
+    // ... imports y constructor existentes ...
+
+    /**
+     * Genera el reporte mensual de transferencias.
+     * Si no se especifica mes/año, toma el mes anterior a la fecha actual.
+     */
+    public function generateMonthlyReport(?int $month = null, ?int $year = null): void
+    {
+        // 1. Calcular Fechas (Inicio y Fin de Mes)
+        if ($month === null || $year === null) {
+            // Por defecto: Mes anterior
+            $fechaBase = new \DateTime('first day of last month');
+        } else {
+            $fechaBase = new \DateTime("$year-$month-01");
+        }
+
+        $fechaInicio = $fechaBase->format('Y-m-01 00:00:00');
+        $fechaFin    = $fechaBase->format('Y-m-t 23:59:59');
+        
+        $nombreMes   = $fechaBase->format('F Y'); // Ej: "November 2025"
+
+        $this->logger->info("Generando reporte mensual para: $nombreMes ($fechaInicio a $fechaFin)");
+
+        // 2. Consulta SQL Agregada
+        $sql = "SELECT 
+                    SUM(saldo_inicial_bind) as total_bruto,
+                    SUM(comision_monto) as total_comision,
+                    SUM(iva_monto) as total_iva,
+                    SUM(monto_neto_calculado) as total_neto,
+                    SUM(monto_transferido_tercero) as total_tercero,
+                    SUM(monto_transferido_pd) as total_pd,
+                    COUNT(id) as cantidad_lotes
+                FROM lotes_transferencias_mute 
+                WHERE fecha >= :inicio 
+                  AND fecha <= :fin 
+                  AND estado = 'EXITO'";
+
+        // Ejecutar consulta (Doctrine DBAL)
+        $stm = $this->db->executeQuery($sql, [
+            'inicio' => $fechaInicio,
+            'fin'    => $fechaFin
+        ]);
+        
+        $datos = $stm->fetchAssociative();
+
+        // Validar si hubo movimientos
+        if (!$datos || $datos['cantidad_lotes'] == 0) {
+            $this->logger->info("No se encontraron movimientos exitosos para $nombreMes. Reporte omitido.");
+            return;
+        }
+
+        // 3. Armar HTML y Enviar
+        $htmlBody = $this->buildMonthlyEmailBody($datos, $nombreMes);
+        
+        $asunto = "Reporte MENSUAL Mute - " . $fechaBase->format('m/Y');
+        
+        // Usamos el nuevo método HTML del Notifier
+        $this->notifier->sendHtmlEmail($asunto, $htmlBody);
+        
+        $this->logger->info("Reporte mensual enviado con éxito.");
+    }
+
+    private function buildMonthlyEmailBody(array $d, string $periodo): string
+    {
+        // Estilos CSS inline para asegurar compatibilidad con Gmail/Outlook
+        $styleTable = "width: 100%; border-collapse: collapse; font-family: Arial, sans-serif; font-size: 14px;";
+        $styleTh    = "background-color: #f2f2f2; border: 1px solid #ddd; padding: 10px; text-align: left;";
+        $styleTd    = "border: 1px solid #ddd; padding: 10px; text-align: right;";
+        $styleTdTxt = "border: 1px solid #ddd; padding: 10px; text-align: left;";
+        
+        return "
+        <h2 style='font-family: Arial, sans-serif; color: #333;'>Reporte Mensual de Liquidaciones - Mute</h2>
+        <p style='font-family: Arial, sans-serif;'><strong>Período:</strong> $periodo</p>
+        <p style='font-family: Arial, sans-serif;'><strong>Cantidad de Lotes Procesados:</strong> {$d['cantidad_lotes']}</p>
+        <br>
+        <table style='$styleTable'>
+            <thead>
+                <tr>
+                    <th style='$styleTh'>Concepto</th>
+                    <th style='$styleTh'>Monto Acumulado ($)</th>
+                    <th style='$styleTh'>Destino</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td style='$styleTdTxt'><strong>Total Bruto Recaudado (BIND)</strong></td>
+                    <td style='$styleTd'><strong>" . number_format($d['total_bruto'], 2) . "</strong></td>
+                    <td style='$styleTdTxt'>Cuenta Recaudadora ($this->cvuOrigen)</td>
+                </tr>
+                <tr>
+                    <td style='$styleTdTxt' colspan='3'>&nbsp;</td>
+                </tr>
+                <tr>
+                    <td style='$styleTdTxt'>(-) Total Comisiones</td>
+                    <td style='$styleTd'>" . number_format($d['total_comision'], 2) . "</td>
+                    <td style='$styleTdTxt'>-</td>
+                </tr>
+                <tr>
+                    <td style='$styleTdTxt'>(-) Total IVA Comisiones</td>
+                    <td style='$styleTd'>" . number_format($d['total_iva'], 2) . "</td>
+                    <td style='$styleTdTxt'>-</td>
+                </tr>
+                <tr>
+                    <td style='$styleTdTxt'><strong>(=) Total Neto Distribuible</strong></td>
+                    <td style='$styleTd'><strong>" . number_format($d['total_neto'], 2) . "</strong></td>
+                    <td style='$styleTdTxt'>-</td>
+                </tr>
+                <tr>
+                    <td style='$styleTdTxt' colspan='3'>&nbsp;</td>
+                </tr>
+                <tr style='background-color: #eafaf1;'>
+                    <td style='$styleTdTxt'><strong>Transferido a TERCERO (90%)</strong></td>
+                    <td style='$styleTd; color: green;'><strong>" . number_format($d['total_tercero'], 2) . "</strong></td>
+                    <td style='$styleTdTxt'>$this->cvuTercero</td>
+                </tr>
+                <tr style='background-color: #ebf5fb;'>
+                    <td style='$styleTdTxt'><strong>Transferido a PAGOS DIGITALES</strong><br><small>(10% + Com + IVA)</small></td>
+                    <td style='$styleTd; color: #0056b3;'><strong>" . number_format($d['total_pd'], 2) . "</strong></td>
+                    <td style='$styleTdTxt'>$this->cvuPagosDigitales</td>
+                </tr>
+            </tbody>
+        </table>
+        <br>
+        <p style='font-family: Arial, sans-serif; font-size: 12px; color: #777;'>
+            Este reporte fue generado automáticamente el " . date('d/m/Y H:i:s') . ".
+        </p>";
+    }
+    
     private function buildEmailBody($total, $com, $iva, $neto, $tercero, $pd, $ids, string $cvuOrigenReal): string 
     {
         // Formateamos los montos para que se vean bien
