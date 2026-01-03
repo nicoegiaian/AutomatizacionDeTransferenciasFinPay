@@ -103,4 +103,51 @@ class Notifier
             return false;
         }
     }
+    /**
+     * Envía un correo con contenido HTML.
+     */
+    public function sendHtmlEmail(string $subject, string $htmlBody, ?string $attachmentPath = null): bool
+    {
+        $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
+
+        try {
+            // Configuración SMTP (Copia de la lógica existente)
+            $mail->isSMTP();
+            $mail->Host       = $this->host;
+            $mail->SMTPAuth   = true;
+            $mail->Username   = $this->username;
+            $mail->Password   = $this->password;
+            
+            $mail->SMTPSecure = ($this->encryption === 'ssl') 
+                              ? \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS 
+                              : \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS; 
+            
+            $mail->Port       = $this->port;
+            $mail->CharSet    = 'UTF-8';
+            
+            $mail->setFrom($this->username, 'Orquestador FinPay');
+            foreach ($this->destinations as $address) {
+                if (filter_var($address, FILTER_VALIDATE_EMAIL)) {
+                    $mail->addAddress($address);
+                }
+            }
+
+            if ($attachmentPath !== null && file_exists($attachmentPath)) {
+                $mail->addAttachment($attachmentPath);
+            }
+
+            // --- DIFERENCIA CLAVE: isHTML(true) ---
+            $mail->isHTML(true); 
+            $mail->Subject = $subject;
+            $mail->Body    = $htmlBody;
+            // Versión texto plano por si el cliente de correo no soporta HTML
+            $mail->AltBody = strip_tags($htmlBody); 
+
+            $mail->send();
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error("FALLO ENVIO HTML MAIL: " . $mail->ErrorInfo);
+            return false;
+        }
+    }
 }
