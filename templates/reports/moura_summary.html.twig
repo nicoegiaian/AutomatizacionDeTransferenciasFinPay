@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        h1 { color: #333; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
+        .box { background: #f9f9f9; padding: 20px; border: 1px solid #ddd; margin-top: 20px; }
+        table { width: 100%; margin-top: 15px; }
+        td { padding: 10px; font-size: 14px; border-bottom: 1px solid #eee; }
+        .amount { text-align: right; font-weight: bold; }
+        .logo { max-height: 60px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    {% if logo %}
+        <img src="data:image/png;base64,{{ logo }}" class="logo">
+    {% endif %}
+    
+    <h1>Resumen Mensual Global - Moura</h1>
+    <div class="box">
+        <p><strong>Período:</strong> {{ totals.periodo }}</p>
+        <p><strong>Comercios Procesados:</strong> {{ totals.cant_comercios }}</p>
+        
+        <table>
+            <tr>
+                <td>Total Ventas Brutas (Plataforma)</td>
+                <td class="amount">$ {{ totals.total_ventas_bruto|number_format(2,',','.') }}</td>
+            </tr>
+            <tr>
+                <td>Total Dispersado a Comercios</td>
+                <td class="amount">$ {{ totals.total_dispersado_comercios|number_format(2,',','.') }}</td>
+            </tr>
+            <tr>
+                <td style="color: #006600;">Total Recaudado para Moura (CC)</td>
+                <td class="amount" style="color: #006600;">$ {{ totals.total_recaudado_para_moura|number_format(2,',','.') }}</td>
+            </tr>
+            <tr>
+                <td>Total Comisiones Ganadas</td>
+                <td class="amount">$ {{ totals.total_comisiones_ganadas|number_format(2,',','.') }}</td>
+            </tr>
+            <tr>
+                <td>Total Beneficios/Subsidios Otorgados</td>
+                <td class="amount">$ {{ totals.total_beneficios_otorgados|number_format(2,',','.') }}</td>
+            </tr>
+        </table>
+    </div>
+    <p style="margin-top:50px; text-align:center; color:#999;">FinPay - Reporte Automático</p>
+</body>
+</html>
