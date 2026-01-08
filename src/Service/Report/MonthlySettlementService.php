@@ -33,21 +33,21 @@ class MonthlySettlementService
         
         $sql = "
             SELECT
-            puntosdeventa.razonsocial as 'Razón Social',
+            puntosdeventa.razonsocial as 'razon_social',
             puntosdeventa.cuit,
             puntosdeventa.comercio,
             Count(transacciones.nrotransaccion) as 'Cantidad',
-            metodopago as 'Método de Pago',
-            SUM(importecheque) as Venta,
-            SUM(comisionpd) as 'Costo de Servicio',
-            SUM(comisionprontopago + descuentocuotas) as 'Costo Financiación',
-            SUM(IFNULL(aranceltarjeta, 0)) as 'Arancel Tarjeta',
-            SUM(ivacomisionpd + ivacomisionprontopago + ivadescuentocuotas + ivacostoacreditacion + ivaaranceltarjeta) as 'IVA',
-            SUM(sirtac + otrosimpuestos) as 'Otros impuestos',
-            SUM(IFNULL(beneficiocredmoura, 0)) as 'Beneficio CREDMOURA',
-            SUM(importeprimervenc) as 'Total',
-            SUM(ROUND((((importeprimervenc)*(splits.porcentajepdv))/100), 2)) as 'A Acred. CC Com.',
-            SUM(ROUND((((importeprimervenc)*(100 - splits.porcentajepdv))/100), 2)) as 'A Acred. CC Moura',
+            metodopago as 'metodopago',
+            SUM(importecheque) as 'venta',
+            SUM(comisionpd) as 'costo_servicio',
+            SUM(comisionprontopago + descuentocuotas) as 'costo_financiacion',
+            SUM(IFNULL(aranceltarjeta, 0)) as 'arancel_tarjeta',
+            SUM(ivacomisionpd + ivacomisionprontopago + ivadescuentocuotas + ivacostoacreditacion + ivaaranceltarjeta) as 'iva',
+            SUM(sirtac + otrosimpuestos) as 'otros_impuestos',
+            SUM(IFNULL(beneficiocredmoura, 0)) as 'beneficio_credmoura',
+            SUM(importeprimervenc) as 'total_neto',
+            SUM(ROUND((((importeprimervenc)*(splits.porcentajepdv))/100), 2)) as 'acred_cc_com',
+            SUM(ROUND((((importeprimervenc)*(100 - splits.porcentajepdv))/100), 2)) as 'acred_cc_moura',
             0 as 'Subsidio Moura',
             0 as 'IVA Subsidio Moura',
             0 as 'Transferencia Moura'
@@ -67,10 +67,11 @@ class MonthlySettlementService
             'endDate' => $endDate
         ])->fetchAllAssociative();
 
+        
         $reports = [];
 
         foreach ($rows as $row) {
-            $pdvId = $row['idpdv'];
+            $pdvId = $row['comercio'];
 
             if (!isset($reports[$pdvId])) {
                 // Cálculo Nro Resumen: Comercio (sin C) + Mes (2) + Año (4)
