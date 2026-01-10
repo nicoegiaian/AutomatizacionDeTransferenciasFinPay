@@ -36,7 +36,7 @@ class MonthlySettlementService
             puntosdeventa.razonsocial as 'razon_social',
             puntosdeventa.cuit,
             puntosdeventa.comercio,
-            Count(transacciones.nrotransaccion) as 'Cantidad',
+            Count(transacciones.nrotransaccion) as 'cantidad',
             metodopago as 'metodopago',
             SUM(importecheque) as 'venta',
             SUM(comisionpd) as 'costo_servicio',
@@ -58,7 +58,7 @@ class MonthlySettlementService
             INNER JOIN puntosdeventa ON puntosdeventa.id = transacciones.idpdv
             WHERE splits.fecha = (SELECT MAX(s2.fecha) FROM splits s2 WHERE s2.idpdv = transacciones.idpdv AND s2.fecha < transacciones.fecha AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL)
             AND fechapagobind >= :startDate 
-            AND fechapagobind <= DATE_ADD(:endDate, INTERVAL 1 DAY)
+            AND fechapagobind < DATE_ADD(:endDate, INTERVAL 1 DAY)
             GROUP BY puntosdeventa.razonsocial, puntosdeventa.cuit, metodopago
         ";
 
