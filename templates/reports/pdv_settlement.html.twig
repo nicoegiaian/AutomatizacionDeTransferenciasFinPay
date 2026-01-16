@@ -6,7 +6,7 @@
         @page { margin: 0px; }
         body {
             font-family: Arial, sans-serif; font-size: 11px;
-            margin-top: 130px; margin-left: 40px; margin-right: 40px; margin-bottom: 80px;
+            margin-top: 180px; margin-left: 40px; margin-right: 40px; margin-bottom: 80px;
         }
         .header-img { position: fixed; top: 0; left: 0; width: 100%; height: auto; z-index: -1000; }
         .footer-img { position: fixed; bottom: 20px; right: 20px; width: 150px; height: auto; z-index: -1000; }
@@ -17,6 +17,18 @@
         .total-row td { border-top: 1px solid #000; font-weight: bold; padding-top: 5px;}
         .neto-amount { font-size: 14px; font-weight: bold; text-align: right; }
         .footer-note { position: fixed; bottom: 30px; left: 40px; right: 40px; text-align: center; font-size: 9px; color: #666; font-style: italic; }
+        {% if is_preview is defined and is_preview %}
+        body {
+            width: 21cm;        /* Ancho A4 */
+            min-height: 29.7cm; /* Alto A4 */
+            margin: 20px auto;  /* Centrado en pantalla */
+            border: 1px solid #ccc; /* Borde de la hoja */
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            background: white;
+            padding-top: 1px; /* Evita colapso de márgenes */
+        }
+        html { background: #f0f0f0; } /* Fondo gris de escritorio */
+        {% endif %}
     </style>
 </head>
 <body>
@@ -27,43 +39,172 @@
         <img src="data:image/png;base64,{{ images.pie }}" class="footer-img">
     {% endif %}
 
-    <table>
-        <tr><td style="width:25%; font-weight:bold;">Razón Social</td><td>{{ report.header.razon_social }}</td></tr>
-        <tr><td style="font-weight:bold;">CUIT</td><td>{{ report.header.cuit }}</td></tr>
-        <tr><td style="font-weight:bold;">Período</td><td>{{ report.header.periodo }}</td></tr>
-        <tr><td style="font-weight:bold;">N° Resumen</td><td>{{ report.header.nro_resumen }}</td></tr>
+    <table style="width: 80%; margin: 0 auto; margin-bottom: 15px;">
+        <tr>
+            <td style="width:50%; text-align: right; font-weight:bold; padding-right: 10px;">Razón Social</td>
+            <td style="width:50%; text-align: left; padding-left: 10px;">{{ report.header.razon_social }}</td>
+        </tr>
+        <tr>
+            <td style="text-align: right; font-weight:bold; padding-right: 10px;">CUIT</td>
+            <td style="text-align: left; padding-left: 10px;">{{ report.header.cuit }}</td>
+        </tr>
+        <tr>
+            <td style="text-align: right; font-weight:bold; padding-right: 10px;">Período</td>
+            <td style="text-align: left; padding-left: 10px;">{{ report.header.periodo }}</td>
+        </tr>
+        <tr>
+            <td style="text-align: right; font-weight:bold; padding-right: 10px;">N° Resumen</td>
+            <td style="text-align: left; padding-left: 10px;">{{ report.header.nro_resumen }}</td>
+        </tr>
     </table>
 
-    <div class="section-header">DETALLE DE LAS TRANSACCIONES</div>
-    <table>
-        <thead><tr><th style="width:50%"></th><th class="amount">Cant.</th><th class="amount">MONTO BRUTO</th></tr></thead>
+   <div style="height: 15px;"></div>
+
+    <table style="width: 10.5cm; margin: 0 auto; border: none;">
+        <thead>
+            <tr style="font-weight: bold;">
+                <td style="width: 55%; padding-bottom: 10px;">DETALLE DE LAS TRANSACCIONES</td>
+                <td style="width: 10%; text-align: left; padding-bottom: 10px;"></td>
+                <td style="width: 5%; padding-bottom: 10px;"></td>
+                <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">MONTO BRUTO</td>
+            </tr>
+        </thead>
         <tbody>
-            <tr><td>Ventas Débito</td><td class="amount">{{ report.items.debito.cant }}</td><td class="amount">$ {{ report.items.debito.monto|number_format(2,',','.') }}</td></tr>
-            <tr><td>Ventas Crédito</td><td class="amount">{{ report.items.credito.cant }}</td><td class="amount">$ {{ report.items.credito.monto|number_format(2,',','.') }}</td></tr>
-            <tr><td>Ventas QR</td><td class="amount">{{ report.items.qr.cant }}</td><td class="amount">$ {{ report.items.qr.monto|number_format(2,',','.') }}</td></tr>
-            <tr class="total-row"><td>TOTAL</td><td class="amount">{{ report.totales.transacciones }}</td><td class="amount">$ {{ report.totales.bruto|number_format(2,',','.') }}</td></tr>
+            <tr>
+                <td style="font-weight: bold;">Ventas con tarjetas de Débito</td>
+                <td style="text-align: left;">{{ report.items.debito.cant }}</td>
+                <td></td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.items.debito.monto|number_format(2,',','.') }}</td>
+            </tr>
+            
+            <tr>
+                <td style="font-weight: bold;">Ventas con tarjetas de Crédito</td>
+                <td style="text-align: left;">{{ report.items.credito.cant }}</td>
+                <td></td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.items.credito.monto|number_format(2,',','.') }}</td>
+            </tr>
+
+            {% if report.items.qr.cant > 0 %}
+            <tr>
+                <td style="font-weight: bold;">Ventas con QR</td>
+                <td style="text-align: left;">{{ report.items.qr.cant }}</td>
+                <td></td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.items.qr.monto|number_format(2,',','.') }}</td>
+            </tr>
+            {% endif %}
+
+            <tr>
+                <td style="font-weight: bold;">Devoluciones</td>
+                <td style="text-align: left;">0</td>
+                <td></td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;"> - </td>
+            </tr>
+
+            <tr><td colspan="5" style="height: 5px;"></td></tr>
+
+            <tr style="font-weight: bold;">
+                <td>TOTAL</td>
+                <td style="text-align: left;">{{ report.totales.transacciones }}</td>
+                <td></td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.totales.bruto|number_format(2,',','.') }}</td>
+            </tr>
         </tbody>
     </table>
 
-    <div class="section-header">DETALLE DESCUENTOS</div>
-    <table>
-        <tr><td>Costo de servicio</td><td class="amount">$ {{ report.totales.costo_servicio|number_format(2,',','.') }}</td></tr>
-        <tr><td>Costo financiación</td><td class="amount">$ {{ report.totales.costo_financiacion|number_format(2,',','.') }}</td></tr>
-        <tr><td>Aranceles tarjetas</td><td class="amount">$ {{ report.totales.aranceles|number_format(2,',','.') }}</td></tr>
-        <tr><td>IVA</td><td class="amount">$ {{ report.totales.iva|number_format(2,',','.') }}</td></tr>
-        <tr><td>Otros impuestos</td><td class="amount">$ {{ report.totales.otros_impuestos|number_format(2,',','.') }}</td></tr>
+    <div style="height: 20px;"></div>
+
+    <table style="width: 10.5cm; margin: 0 auto; border: none;">
+        <thead>
+            <tr style="font-weight: bold;">
+                <td style="width: 70%; padding-bottom: 10px;">DETALLE DESCUENTOS</td>
+                
+                <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">IMPORTE</td>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="width: 70%; font-weight: bold;">Costo de servicio</td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.totales.costo_servicio|number_format(2,',','.') }}</td>
+            </tr>
+
+            <tr>
+                <td style="font-weight: bold;">Costo financiación</td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.totales.costo_financiacion|number_format(2,',','.') }}</td>
+            </tr>
+
+            <tr>
+                <td style="font-weight: bold;">Aranceles tarjetas</td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.totales.aranceles|number_format(2,',','.') }}</td>
+            </tr>
+
+            <tr>
+                <td style="font-weight: bold;">IVA</td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.totales.iva|number_format(2,',','.') }}</td>
+            </tr>
+
+            <tr>
+                <td style="font-weight: bold;">Otros impuestos</td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.totales.otros_impuestos|number_format(2,',','.') }}</td>
+            </tr>
+        </tbody>
     </table>
 
-    <table style="width:60%; margin-top:20px;">
-        <tr><td style="font-weight:bold;">NETO PERCIBIDO</td><td class="neto-amount">$ {{ report.totales.neto_percibido|number_format(2,',','.') }}</td></tr>
-    </table>
+    <div style="height: 40px;"></div>
+
+    <div style="margin-bottom: 20px; text-align: center;">
     
-    <table style="width:60%; margin-top:10px;">
-        <tr><td>EN CUENTA COMERCIO</td><td class="amount">$ {{ report.totales.en_cuenta_comercio|number_format(2,',','.') }}</td></tr>
-        <tr><td>EN CC BATERIAS MOURA</td><td class="amount">$ {{ report.totales.en_cc_moura|number_format(2,',','.') }}</td></tr>
-        <tr><td style="padding-top:10px;">BENEFICIO CREDMOURA</td><td class="amount" style="padding-top:10px;">$ {{ report.totales.beneficio_credmoura|number_format(2,',','.') }}</td></tr>
-    </table>
+    {# BLOQUE 1 #}
+    {# PERILLA DE AJUSTE: Cambia 5px por 2px, 8px, 10px... lo que te guste #}
+    <p style="margin-bottom: 5px; font-weight: bold;">
+        NETO PERCIBIDO
+    </p>
 
-    <div class="footer-note">DOCUMENTO NO VALIDO PARA EL COMPUTO DE EGRESOS Y/O IMPUESTOS DETALLADOS</div>
+    {# ESTO NO SE TOCA: Déjalo en 0 para que obedezca al de arriba #}
+    <p style="margin-top: 0px;"> 
+        $ {{ report.totales.neto_percibido|number_format(2,',','.') }}
+    </p>
+
+    {# BLOQUE 2 #}
+     <p style="margin-bottom: 5px; font-weight: bold;">
+        EN CUENTA COMERCIO
+    </p>
+    <p style="margin-top: 0px;">
+       ${{ report.totales.en_cuenta_comercio|number_format(2,',','.') }}
+    </p>
+     
+
+    {# BLOQUE 1 #}
+    {# PERILLA DE AJUSTE: Cambia 5px por 2px, 8px, 10px... lo que te guste #}
+    <p style="margin-bottom: 5px; font-weight: bold;">
+        EN CC BATERIAS MOURA
+    </p>
+
+    {# ESTO NO SE TOCA: Déjalo en 0 para que obedezca al de arriba #}
+    <p style="margin-top: 0px;"> 
+       $ {{ report.totales.en_cc_moura|number_format(2,',','.') }}
+    </p>
+
+{# BLOQUE 2 #}
+     <p style="margin-bottom: 5px; font-weight: bold;">
+        BENEFICIO CREDMOURA
+    </p>
+    <p style="margin-top: 0px;">
+       $ {{ report.totales.beneficio_credmoura|number_format(2,',','.') }}
+    </p>
+
+
+    <div style="height: 30px;"></div>
+
+    <div class="footer-note">DOCUMENTO NO VALIDO PARA EL COMPUTO DE EGRESOS Y/O IMPUESTOS DETALLADOS PRECEDENTEMENTE</div>
 </body>
 </html>

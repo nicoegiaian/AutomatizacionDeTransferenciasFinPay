@@ -103,9 +103,14 @@ class PdfReportGenerator
     public function generateMouraCover(array $totals, int $month, int $year): string
     {
         // Carátula simple para Moura
+        $images = [
+            'encabezado' => $this->getBase64Image('img/encabezado.png'),
+            'pie' => $this->getBase64Image('img/pie.png')
+        ];
+
         $html = $this->twig->render('reports/moura_summary.html.twig', [
-            'totals' => $totals,
-            'logo' => $this->getBase64Image('img/encabezado.png') // Reutilizamos el encabezado o logo
+            'report' => $totals,
+            'images' => $images
         ]);
 
         $pdfContent = $this->renderPdf($html);

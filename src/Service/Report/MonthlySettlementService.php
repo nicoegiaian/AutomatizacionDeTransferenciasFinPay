@@ -149,29 +149,112 @@ class MonthlySettlementService
      */
     public function getMouraTotals(int $month, int $year): array
     {
-        // Reutilizamos la lógica llamando a getMonthlyData y sumando en PHP
-        // (Es más seguro que duplicar la query y errarle en un WHERE)
-        $data = $this->getMonthlyData($month, $year);
-
-        $totals = [
-            'periodo' => "$month/$year",
-            'cant_comercios' => count($data),
-            'total_ventas_bruto' => 0.0,
-            'total_comisiones_ganadas' => 0.0, // (Costo servicio + financiación)
-            'total_recaudado_para_moura' => 0.0, // (en_cc_moura)
-            'total_dispersado_comercios' => 0.0, // (en_cuenta_comercio)
-            'total_beneficios_otorgados' => 0.0, // (beneficio_credmoura)
+        $startDate = sprintf('%d-%02d-01', $year, $month);
+        $endDate = date('Y-m-t', strtotime($startDate));
+        
+        $nombresMeses = [
+            1 => 'Enero', 2 => 'Febrero', 3 => 'Marzo', 4 => 'Abril', 
+            5 => 'Mayo', 6 => 'Junio', 7 => 'Julio', 8 => 'Agosto',
+            9 => 'Septiembre', 10 => 'Octubre', 11 => 'Noviembre', 12 => 'Diciembre'
         ];
+        $periodoTexto = $nombresMeses[$month] . ' ' . $year;
 
-        foreach ($data as $pdv) {
-            $t = $pdv['totales'];
-            $totals['total_ventas_bruto'] += $t['bruto'];
-            $totals['total_comisiones_ganadas'] += ($t['costo_servicio'] + $t['costo_financiacion']);
-            $totals['total_recaudado_para_moura'] += $t['en_cc_moura'];
-            $totals['total_dispersado_comercios'] += $t['en_cuenta_comercio'];
-            $totals['total_beneficios_otorgados'] += $t['beneficio_credmoura'];
+        $sql = "
+            SELECT
+                unidadesdenegocio.nombre as 'unidad_negocio',
+                
+                -- 1. Desglose de Items (Sumas Condicionales para reemplazar el Group By MetodoPago)
+                SUM(IF(metodopago IN ('DE', 'PR'), 1, 0)) as cant_debito,
+                SUM(IF(metodopago IN ('DE', 'PR'), importecheque, 0)) as monto_debito,
+                
+                SUM(IF(metodopago = 'CR', 1, 0)) as cant_credito,
+                SUM(IF(metodopago = 'CR', importecheque, 0)) as monto_credito,
+                
+                SUM(IF(metodopago = 'QR', 1, 0)) as cant_qr,
+                SUM(IF(metodopago = 'QR', importecheque, 0)) as monto_qr,
+
+                -- 2. Totales Generales
+                COUNT(transacciones.nrotransaccion) as 'transacciones',
+                SUM(importecheque) as 'bruto',
+                
+                -- Costos y Deducciones
+                SUM(comisionpd) as 'costo_servicio_real', -- La suma real para el bloque de abajo
+                SUM(comisionprontopago + descuentocuotas) as 'costo_financiacion',
+                SUM(IFNULL(aranceltarjeta, 0)) as 'aranceles_tarjetas',
+                SUM(ivacomisionpd + ivacomisionprontopago + ivadescuentocuotas + ivacostoacreditacion + ivaaranceltarjeta) as 'IVA',
+                SUM(sirtac + otrosimpuestos) as 'otros_impuestos',
+                
+                -- Distribución
+                SUM(IFNULL(beneficiocredmoura, 0)) as 'beneficio_credmoura',
+                SUM(importeprimervenc) as 'neto_percibido',
+                SUM(ROUND((((importeprimervenc)*(splits.porcentajepdv))/100), 2)) as 'en_cuenta_comercio',
+                SUM(ROUND((((importeprimervenc)*(100 - splits.porcentajepdv))/100), 2)) as 'en_cc_moura',
+
+                -- 3. Campos Específicos para Cálculo Moura
+                SUM(liquidacionesdetalle.subsidiomoura) as 'total_subsidio',
+                SUM(liquidacionesdetalle.ivasubsidiomoura) as 'total_iva_subsidio'
+
+            FROM transacciones
+            INNER JOIN liquidacionesdetalle ON transacciones.nrotransaccion = liquidacionesdetalle.nrotransaccion    
+            INNER JOIN splits ON transacciones.idpdv = splits.idpdv
+            INNER JOIN puntosdeventa ON puntosdeventa.id = transacciones.idpdv
+            INNER JOIN unidadesdenegocio ON puntosdeventa.idunidadnegocio = unidadesdenegocio.id -- JOIN NUEVO
+            
+            WHERE splits.fecha = (SELECT MAX(s2.fecha) FROM splits s2 WHERE s2.idpdv = transacciones.idpdv AND s2.fecha < transacciones.fecha AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL)
+            AND fechapagobind >= :startDate 
+            AND fechapagobind < DATE_ADD(:endDate, INTERVAL 1 DAY)
+            
+            GROUP BY unidadesdenegocio.nombre
+        ";
+
+        $rows = $this->connection->executeQuery($sql, [
+            'startDate' => $startDate,
+            'endDate' => $endDate
+        ])->fetchAllAssociative();
+
+        $reports = [];
+
+        foreach ($rows as $row) {
+            // Cálculos Post-Query
+            $transferenciaMoura = $row['en_cc_moura'] - ($row['total_subsidio'] + $row['total_iva_subsidio']);
+            
+            // Armado de estructura idéntica al Twig
+            $reports[] = [
+                'header' => [
+                    'titulo' => 'Resumen total Liquidaciones Cobres Flex',
+                    'unidad_de_negocio' => $row['unidad_negocio'],
+                    'periodo' => $periodoTexto
+                ],
+                'items' => [
+                    'debito' => ['cant' => $row['cant_debito'], 'monto' => $row['monto_debito']],
+                    'credito' => ['cant' => $row['cant_credito'], 'monto' => $row['monto_credito']],
+                    'qr' => ['cant' => $row['cant_qr'], 'monto' => $row['monto_qr']],
+                ],
+                'totales' => [
+                    'transacciones' => $row['transacciones'],
+                    'bruto' => $row['bruto'],
+                    
+                    // TABLA DESCUENTOS (El primero harcodeado a 0 como pediste)
+                    'costo_de_servicio' => 0.0, 
+                    
+                    'costo_de_financiacion' => $row['costo_financiacion'],
+                    'aranceles_tarjetas' => $row['aranceles_tarjetas'],
+                    'IVA' => $row['IVA'],
+                    'otros_impuestos' => $row['otros_impuestos'],
+                    
+                    // BLOQUE INFERIOR DE TOTALES
+                    'neto_percibido' => $row['neto_percibido'],
+                    'en_cuenta_comercio' => $row['en_cuenta_comercio'],
+                    'en_cc_moura' => $row['en_cc_moura'],
+                    'beneficio_credmoura' => $row['beneficio_credmoura'],
+                    'transferencia_moura' => $transferenciaMoura,
+                    
+                    // Nuevo campo para el bloque de abajo (suma real)
+                    'costo_servicio_bloque' => $row['costo_servicio_real'] 
+                ]
+            ];
         }
 
-        return $totals;
+        return $reports;
     }
 }

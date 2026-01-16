@@ -3,48 +3,224 @@
 <head>
     <meta charset="UTF-8">
     <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        h1 { color: #333; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
-        .box { background: #f9f9f9; padding: 20px; border: 1px solid #ddd; margin-top: 20px; }
-        table { width: 100%; margin-top: 15px; }
-        td { padding: 10px; font-size: 14px; border-bottom: 1px solid #eee; }
-        .amount { text-align: right; font-weight: bold; }
-        .logo { max-height: 60px; margin-bottom: 20px; }
+        @page { margin: 0px; }
+        
+        body { 
+            /* Se mantiene tu elección de Helvetica, aunque para igualar el PDF original 
+               recomendamos Georgia. Si quieres volver a Georgia, cambia esto. */
+            font-family: Helvetica, Arial, sans-serif; 
+            color: #000;
+        }
+
+        /* --- CLASES PARA TOTALES --- */
+        .bloque-totales {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .titulo-concepto {
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 11px;
+            margin-bottom: 5px; 
+        }
+
+        .valor-importe {
+            font-weight: normal;
+            font-size: 11px;
+            margin-top: 0px; 
+        }
+
+        /* --- OTROS ESTILOS --- */
+        .header-img { position: fixed; top: 0; left: 0; width: 100%; height: auto; z-index: -1000; }
+        .footer-img { position: fixed; bottom: 20px; right: 20px; width: 150px; height: auto; z-index: -1000; }
+        
+        table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+        th, td { padding: 4px; text-align: left; vertical-align: top; }
+        
+        .footer-note { 
+            position: fixed; bottom: 30px; left: 40px; right: 40px; 
+            text-align: center; font-size: 9px; color: #666; font-style: italic; 
+        }
+
+        /* Salto de página para separar Unidades de Negocio */
+        .page-break { 
+            page-break-after: always; 
+        }
+
+        {% if is_preview is defined and is_preview %}
+        body {
+            width: 21cm; min-height: 29.7cm; margin: 20px auto;
+            border: 1px solid #ccc; box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            background: white; padding-top: 1px;
+        }
+        html { background: #f0f0f0; }
+        {% endif %}
     </style>
 </head>
 <body>
-    {% if logo %}
-        <img src="data:image/png;base64,{{ logo }}" class="logo">
-    {% endif %}
-    
-    <h1>Resumen Mensual Global - Moura</h1>
-    <div class="box">
-        <p><strong>Período:</strong> {{ totals.periodo }}</p>
-        <p><strong>Comercios Procesados:</strong> {{ totals.cant_comercios }}</p>
+    {# BUCLE PRINCIPAL: Recorremos cada reporte (Unidad de Negocio) #}
+    {% for r in report %}
+
+        {# Imágenes fijas (fuera del flujo normal para que se repitan si DomPDF lo soporta, 
+           o insertadas en cada vuelta) #}
+        {% if images.encabezado %}
+            <img src="data:image/png;base64,{{ images.encabezado }}" class="header-img">
+        {% endif %}
+        {% if images.pie %}
+            <img src="data:image/png;base64,{{ images.pie }}" class="footer-img">
+        {% endif %}
         
-        <table>
-            <tr>
-                <td>Total Ventas Brutas (Plataforma)</td>
-                <td class="amount">$ {{ totals.total_ventas_bruto|number_format(2,',','.') }}</td>
-            </tr>
-            <tr>
-                <td>Total Dispersado a Comercios</td>
-                <td class="amount">$ {{ totals.total_dispersado_comercios|number_format(2,',','.') }}</td>
-            </tr>
-            <tr>
-                <td style="color: #006600;">Total Recaudado para Moura (CC)</td>
-                <td class="amount" style="color: #006600;">$ {{ totals.total_recaudado_para_moura|number_format(2,',','.') }}</td>
-            </tr>
-            <tr>
-                <td>Total Comisiones Ganadas</td>
-                <td class="amount">$ {{ totals.total_comisiones_ganadas|number_format(2,',','.') }}</td>
-            </tr>
-            <tr>
-                <td>Total Beneficios/Subsidios Otorgados</td>
-                <td class="amount">$ {{ totals.total_beneficios_otorgados|number_format(2,',','.') }}</td>
-            </tr>
-        </table>
-    </div>
-    <p style="margin-top:50px; text-align:center; color:#999;">FinPay - Reporte Automático</p>
+        <div style="position: relative; height: 100%;">
+            
+            <h1 style="text-align: center; margin-top: 160px; font-size: 18px; text-decoration: underline;">
+                Resumen total Liquidaciones Cobres Flex
+            </h1>            
+            <div style="margin-left: 40px; margin-right: 40px; text-align: right;">
+                <p style="margin: 2px 0;"><strong>Unidad de Negocio:</strong> {{ r.header.unidad_de_negocio }}</p>
+                <p style="margin: 2px 0;"><strong>Período:</strong> {{ r.header.periodo }}</p>
+            </div>>
+                        
+            <table style="width: 10.5cm; margin: 0 auto; border: none;">
+                <thead>
+                    <tr style="font-weight: bold;">
+                        <td style="width: 55%; padding-bottom: 10px;">DETALLE DE LAS TRANSACCIONES</td>
+                        <td style="width: 10%; padding-bottom: 10px;"></td>
+                        <td style="width: 5%; padding-bottom: 10px;"></td>
+                        <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">MONTO BRUTO</td>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="font-weight: bold;">Ventas con tarjetas de Débito</td>
+                        <td>{{ r.items.debito.cant }}</td>
+                        <td></td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;">{{ r.items.debito.monto|number_format(2,',','.') }}</td>
+                    </tr>
+                    
+                    <tr>
+                        <td style="font-weight: bold;">Ventas con tarjetas de Crédito</td>
+                        <td>{{ r.items.credito.cant }}</td>
+                        <td></td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;">{{ r.items.credito.monto|number_format(2,',','.') }}</td>
+                    </tr>
+
+                    {% if r.items.qr.cant > 0 %}
+                    <tr>
+                        <td style="font-weight: bold;">Ventas con QR</td>
+                        <td>{{ r.items.qr.cant }}</td>
+                        <td></td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;">{{ r.items.qr.monto|number_format(2,',','.') }}</td>
+                    </tr>
+                    {% endif %}
+
+                    <tr>
+                        <td style="font-weight: bold;">Devoluciones</td>
+                        <td>0</td>
+                        <td></td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;"> - </td>
+                    </tr>
+
+                    <tr><td colspan="5" style="height: 5px;"></td></tr>
+
+                    <tr style="font-weight: bold;">
+                        <td>TOTAL</td>
+                        {# CORREGIDO: r.totales (español) en lugar de report.totals #}
+                        <td>{{ r.totales.transacciones }}</td>
+                        <td></td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;">{{ r.totales.bruto|number_format(2,',','.') }}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div style="height: 20px;"></div>
+
+            <table style="width: 10.5cm; margin: 0 auto; border: none;">
+                <thead>
+                    <tr style="font-weight: bold;">
+                        <td style="width: 70%; padding-bottom: 10px;">DETALLE DESCUENTOS</td>
+                        <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">IMPORTE</td>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="font-weight: bold;">Costo de servicio</td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        {# Este es el que querías en 0, viene como costo_de_servicio #}
+                        <td style="text-align: right; padding-left: 0;">{{ r.totales.costo_de_servicio|number_format(2,',','.') }}</td>
+                    </tr>
+                    <tr>
+                        <td style="font-weight: bold;">Costo financiación</td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;">{{ r.totales.costo_de_financiacion|number_format(2,',','.') }}</td>
+                    </tr>
+                    <tr>
+                        <td style="font-weight: bold;">Aranceles Tarjetas</td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;">{{ r.totales.aranceles_tarjetas|number_format(2,',','.') }}</td>
+                    </tr>
+                    <tr>
+                        <td style="font-weight: bold;">IVA</td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;">{{ r.totales.IVA|number_format(2,',','.') }}</td>
+                    </tr>
+                    <tr>
+                        <td style="font-weight: bold;">Otros Impuestos</td>
+                        <td style="text-align: right; padding-right: 2px;">$</td>
+                        <td style="text-align: right; padding-left: 0;">{{ r.totales.otros_impuestos|number_format(2,',','.') }}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div style="height: 40px;"></div>
+
+            <div class="bloque-totales">
+                <p class="titulo-concepto">NETO PERCIBIDO</p>
+                <p class="valor-importe">$ {{ r.totales.neto_percibido|number_format(2,',','.') }}</p>
+            </div>
+
+            <div class="bloque-totales">
+                <p class="titulo-concepto">EN CUENTA COMERCIO</p>
+                <p class="valor-importe">${{ r.totales.en_cuenta_comercio|number_format(2,',','.') }}</p>
+            </div>
+
+            <div class="bloque-totales">
+                <p class="titulo-concepto">EN CC BATERIAS MOURA</p>
+                <p class="valor-importe">$ {{ r.totales.en_cc_moura|number_format(2,',','.') }}</p>
+            </div>
+
+            <div class="bloque-totales">
+                <p class="titulo-concepto">TRANSFERENCIA MOURA</p>
+                <p class="valor-importe">$ {{ r.totales.transferencia_moura|number_format(2,',','.') }}</p>
+            </div>
+
+            <div class="bloque-totales">
+                <p class="titulo-concepto">BENEFICIO CREDMOURA</p>
+                <p class="valor-importe">$ {{ r.totales.beneficio_credmoura|number_format(2,',','.') }}</p>
+            </div>
+
+            <div class="bloque-totales">
+                <p class="titulo-concepto">COSTO DE SERVICIO</p>
+                {# Este es el real, viene como costo_servicio_bloque #}
+                <p class="valor-importe">$ {{ r.totales.costo_servicio_bloque|number_format(2,',','.') }}</p>
+            </div>
+
+            <div style="height: 30px;"></div>
+
+            <div class="footer-note">DOCUMENTO NO VALIDO PARA EL COMPUTO DE EGRESOS Y/O IMPUESTOS DETALLADOS PRECEDENTEMENTE</div>
+            
+        </div>
+
+        {# Salto de página si NO es el último elemento #}
+        {% if not loop.last %}
+            <div class="page-break"></div>
+        {% endif %}
+
+    {% endfor %}
 </body>
 </html>
