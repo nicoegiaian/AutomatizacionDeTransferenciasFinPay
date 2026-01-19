@@ -1,0 +1,23 @@
+-- 1. Agregar columna CBU a la tabla de Unidades de Negocio
+ALTER TABLE unidadesdenegocio 
+ADD COLUMN cbu VARCHAR(22) DEFAULT NULL AFTER nombre;
+
+-- 2. Modificar lotes_liquidacion para manejar el estado dual (PDV vs Moura)
+-- Renombramos estado_actual a estado_actual_pdv para mayor claridad
+ALTER TABLE lotes_liquidacion 
+CHANGE estado_actual estado_actual_pdv VARCHAR(50);
+
+-- Agregamos la columna para el estado global de Moura
+ALTER TABLE lotes_liquidacion 
+ADD COLUMN estado_actual_moura VARCHAR(50) DEFAULT 'PENDING' AFTER estado_actual_pdv;
+
+-- Agregamos una columna JSON para guardar el detalle de qué unidad falló y cuál no
+ALTER TABLE lotes_liquidacion 
+ADD COLUMN detalle_moura_json TEXT DEFAULT NULL AFTER estado_actual_moura;
+
+
+ALTER TABLE transacciones 
+ADD COLUMN transferencia_fabricante_procesada TINYINT(1) DEFAULT 0 AFTER transferencia_procesada;
+
+-- Recomendado: Crear índice para optimizar la nueva query
+CREATE INDEX idx_transf_fab ON transacciones(transferencia_fabricante_procesada);
