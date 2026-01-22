@@ -90,7 +90,7 @@ class PdfReportGenerator
         // 2. Renderizar HTML
         $html = $this->twig->render('reports/pdv_settlement.html.twig', [
             'report' => $data,
-            'images' => $images
+            'images' => $images,
             'font_amasis' => $fontBase64 
         ]);
 
