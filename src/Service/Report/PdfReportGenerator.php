@@ -80,10 +80,18 @@ class PdfReportGenerator
             'pie' => $this->getBase64Image('img/pie.png')
         ];
 
+        $fontPath = $this->projectDir . '/public/fonts/Amasis MT Std Light.ttf';
+        $fontBase64 = '';
+        
+        if (file_exists($fontPath)) {
+            $fontBase64 = base64_encode(file_get_contents($fontPath));
+        }
+
         // 2. Renderizar HTML
         $html = $this->twig->render('reports/pdv_settlement.html.twig', [
             'report' => $data,
             'images' => $images
+            'font_amasis' => $fontBase64 
         ]);
 
         // 3. Generar y Guardar
@@ -102,20 +110,31 @@ class PdfReportGenerator
 
     public function generateMouraCover(array $totals, int $month, int $year): string
     {
-        // Carátula simple para Moura
+        // 1. Cargar Imágenes (lo que ya tenías)
         $images = [
             'encabezado' => $this->getBase64Image('img/encabezado.png'),
             'pie' => $this->getBase64Image('img/pie.png')
         ];
 
+        // 2. NUEVO: Cargar Fuente Amasis
+        // Asumiendo que el archivo se llama "Amasis MT Std Light.ttf"
+        $fontPath = $this->projectDir . '/public/fonts/Amasis MT Std Light.ttf';
+        $fontBase64 = '';
+        
+        if (file_exists($fontPath)) {
+            $fontBase64 = base64_encode(file_get_contents($fontPath));
+        }
+
+        // 3. Renderizar (Pasamos la variable 'font_amasis')
         $html = $this->twig->render('reports/moura_summary.html.twig', [
             'report' => $totals,
-            'images' => $images
+            'images' => $images,
+            'font_amasis' => $fontBase64 // <--- Nueva Variable
         ]);
 
         $pdfContent = $this->renderPdf($html);
         
-        // Guardamos temporalmente la carátula
+        // ... (resto del código igual)
         $tempPath = $this->getTargetDir($month, $year) . '/_temp_moura_cover.pdf';
         file_put_contents($tempPath, $pdfContent);
         
@@ -126,10 +145,37 @@ class PdfReportGenerator
     {
         $pdf = new Fpdi();
         
-        // 1. Agregar Carátula
-        $files = array_merge([$coverPath], $pdvFiles);
+        // --- PASO 1: LA CARÁTULA (Resumen Moura) ---
+        if (file_exists($coverPath)) {
+            try {
+                $pageCount = $pdf->setSourceFile($coverPath);
+                for ($pageNo = 1; $pageNo <= $pageCount; $pageNo++) {
+                    $templateId = $pdf->importPage($pageNo);
+                    $pdf->AddPage(); // Agrega la página
+                    $pdf->useTemplate($templateId);
+                }
+            } catch (\Exception $e) {
+                // Manejo de error si falla la carátula
+            }
+        }
 
-        foreach ($files as $file) {
+        // --- PASO 2: EL SEPARADOR (Nueva hoja generada al vuelo) ---
+        $pdf->AddPage(); // Crea una hoja blanca nueva
+        
+        // Configuramos fuente Helvética, Negrita, tamaño 20
+        $pdf->SetFont('Helvetica', 'B', 20);
+        
+        // Escribimos el texto centrado
+        // Los parámetros son: (width, height, text, border, ln, align)
+        // Usamos Cell(0, ...) para que ocupe todo el ancho y 'C' para centrar
+        
+        // Bajamos un poco el cursor para que quede verticalmente mejor (aprox mitad de hoja A4)
+        $pdf->SetY(130); 
+        $pdf->Cell(0, 10, 'Detalles por punto de Venta', 0, 1, 'C');
+
+
+        // --- PASO 3: LOS ANEXOS (PDFs individuales) ---
+        foreach ($pdvFiles as $file) {
             if (!file_exists($file)) continue;
             try {
                 $pageCount = $pdf->setSourceFile($file);
@@ -146,7 +192,14 @@ class PdfReportGenerator
             $this->filesystem->remove($coverPath);
         }
 
-        $outputPath = $this->getTargetDir($month, $year) . '/MOURA_ANEXO.pdf';
+        // --- PASO 4: NOMBRE DEL ARCHIVO (Moura mmm aa) ---
+        // Ejemplo: Moura Nov 25
+        $mesTexto = self::MESES_CORTO[$month]; // "Nov"
+        $anioCorto = substr((string)$year, -2); // "25"
+        
+        $filename = sprintf('MOURA %s %s.pdf', $mesTexto, $anioCorto);
+        $outputPath = $this->getTargetDir($month, $year) . '/' . $filename;
+
         $pdf->Output('F', $outputPath);
 
         return $outputPath;

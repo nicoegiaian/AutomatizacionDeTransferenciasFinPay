@@ -5,10 +5,17 @@
     <style>
         @page { margin: 0px; }
         
+        @font-face {
+            font-family: 'Amasis MT Pro Light';
+            /* Usamos la variable que viene de PHP */
+            src: url(data:font/truetype;charset=utf-8;base64,{{ font_amasis }}) format('truetype');
+            font-weight: normal;
+            font-style: normal;
+        }
+
         body { 
-            /* Se mantiene tu elección de Helvetica, aunque para igualar el PDF original 
-               recomendamos Georgia. Si quieres volver a Georgia, cambia esto. */
-            font-family: Helvetica, Arial, sans-serif; 
+            /* La aplicamos como prioridad. Si falla, usa serif */
+            font-family: 'Amasis MT Pro Light', "Times New Roman", serif; 
             color: #000;
         }
 
@@ -19,13 +26,14 @@
         }
 
         .titulo-concepto {
-            font-weight: bold;
+            font-weight: bold; /* DomPDF intentará hacer un "Faux Bold" si no tienes el archivo Bold */
             text-transform: uppercase;
-            font-size: 11px;
+            font-size: 14px;
             margin-bottom: 5px; 
         }
 
         .valor-importe {
+            font-family: "Liberation Serif", "DejaVu Serif", serif;
             font-weight: normal;
             font-size: 11px;
             margin-top: 0px; 
@@ -71,9 +79,9 @@
             <img src="data:image/png;base64,{{ images.pie }}" class="footer-img">
         {% endif %}
         
-        <div style="position: relative; height: 100%;">
+        <div style="position: relative;">
             
-            <h1 style="text-align: center; margin-top: 160px; font-size: 18px; text-decoration: underline;">
+            <h1 style="text-align: center; margin-top: 130px; font-size: 18px; text-decoration: underline;">
                 Resumen total Liquidaciones Cobres Flex
             </h1>            
             <div style="margin-left: 40px; margin-right: 40px; text-align: right;">
@@ -185,13 +193,18 @@
             </div>
 
             <div class="bloque-totales">
-                <p class="titulo-concepto">EN CUENTA COMERCIO</p>
-                <p class="valor-importe">${{ r.totales.en_cuenta_comercio|number_format(2,',','.') }}</p>
+                <p class="titulo-concepto">EN CUENTA A COMERCIOS</p>
+                <p class="valor-importe">$ {{ r.totales.en_cuenta_comercio|number_format(2,',','.') }}</p>
             </div>
 
             <div class="bloque-totales">
                 <p class="titulo-concepto">EN CC BATERIAS MOURA</p>
                 <p class="valor-importe">$ {{ r.totales.en_cc_moura|number_format(2,',','.') }}</p>
+            </div>
+
+            <div class="bloque-totales">
+                <p class="titulo-concepto">COSTO DE SERVICIO</p>
+                <p class="valor-importe">$ {{ r.totales.costo_servicio_bloque|number_format(2,',','.') }}</p>
             </div>
 
             <div class="bloque-totales">
@@ -202,12 +215,6 @@
             <div class="bloque-totales">
                 <p class="titulo-concepto">BENEFICIO CREDMOURA</p>
                 <p class="valor-importe">$ {{ r.totales.beneficio_credmoura|number_format(2,',','.') }}</p>
-            </div>
-
-            <div class="bloque-totales">
-                <p class="titulo-concepto">COSTO DE SERVICIO</p>
-                {# Este es el real, viene como costo_servicio_bloque #}
-                <p class="valor-importe">$ {{ r.totales.costo_servicio_bloque|number_format(2,',','.') }}</p>
             </div>
 
             <div style="height: 30px;"></div>
