@@ -312,7 +312,7 @@ class TransferManager
             FROM transacciones t
             INNER JOIN splits ON t.idpdv = splits.idpdv
             WHERE splits.fecha = 
-                (SELECT MAX(s2.fecha) FROM splits s2 WHERE s2.idpdv = t.idpdv AND s2.fecha <= DATE(t.fechapagobind))
+                (SELECT MAX(s2.fecha) FROM splits s2 WHERE s2.idpdv = t.idpdv AND s2.fecha <= DATE(t.fechapagobind) AND s2.estatus_aprobacion = 'Aprobado')
             AND DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 0 
         ";
@@ -344,7 +344,7 @@ class TransferManager
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
             WHERE splits.fecha = 
-                (SELECT MAX(s2.fecha) FROM splits s2 WHERE s2.idpdv = t.idpdv AND s2.fecha <= DATE(t.fechapagobind))
+                (SELECT MAX(s2.fecha) FROM splits s2 WHERE s2.idpdv = t.idpdv AND s2.fecha <= DATE(t.fechapagobind) AND s2.estatus_aprobacion = 'Aprobado')
             AND DATE(t.fechapagobind) = :fecha
             AND t.transferencia_fabricante_procesada = 0  
             GROUP BY u.id, u.nombre, u.cbu
@@ -405,6 +405,7 @@ class TransferManager
                 FROM splits s2
                 WHERE s2.idpdv = t.idpdv 
                 AND s2.fecha <= DATE(t.fechapagobind)
+                AND s2.estatus_aprobacion = 'Aprobado'
                 )
             AND DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 0
