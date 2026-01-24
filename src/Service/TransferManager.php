@@ -307,14 +307,11 @@ class TransferManager
         // 1. PDV
         $queryPdv = "
             SELECT 
-                SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS monto_pdv,
+                SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto_pdv,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
-            INNER JOIN splits ON t.idpdv = splits.idpdv
-            WHERE splits.fecha = 
-                (SELECT MAX(s2.fecha) FROM splits s2 WHERE s2.idpdv = t.idpdv AND s2.fecha <= DATE(t.fechapagobind) AND s2.estatus_aprobacion = 'Aprobado')
-            AND DATE(t.fechapagobind) = :fecha 
-            AND t.transferencia_procesada = 0 
+            WHERE DATE(t.fechapagobind) = :fecha 
+            AND t.transferencia_procesada = 0
         ";
         $dataPdv = $this->dbConnection->executeQuery($queryPdv, ['fecha' => $fechaSQL])->fetchAssociative();
 
@@ -326,7 +323,7 @@ class TransferManager
                 u.cbu as cbu_unidad,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv, 
                 ROUND(
-                    SUM(ROUND((((t.importeprimervenc)*(100 - splits.porcentajepdv))/100), 2)) 
+                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
                     - 
                     (
                         SUM(t.importecheque) * (
@@ -340,11 +337,8 @@ class TransferManager
                     )
                 , 2) AS monto_calculado
             FROM transacciones t
-            INNER JOIN splits ON t.idpdv = splits.idpdv
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
-            WHERE splits.fecha = 
-                (SELECT MAX(s2.fecha) FROM splits s2 WHERE s2.idpdv = t.idpdv AND s2.fecha <= DATE(t.fechapagobind) AND s2.estatus_aprobacion = 'Aprobado')
             AND DATE(t.fechapagobind) = :fecha
             AND t.transferencia_fabricante_procesada = 0  
             GROUP BY u.id, u.nombre, u.cbu
@@ -392,22 +386,13 @@ class TransferManager
                 p.razonsocial,
                 p.cbu AS cbuDestino,
                 u.nombre AS nombre_unidad,  
-                SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS total_monto,
+                SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS total_monto,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
             JOIN puntosdeventa p ON t.idpdv = p.id
             JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id 
-            INNER JOIN splits ON t.idpdv = splits.idpdv
             LEFT JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
-            WHERE splits.fecha = 
-                (
-                SELECT MAX(s2.fecha)
-                FROM splits s2
-                WHERE s2.idpdv = t.idpdv 
-                AND s2.fecha <= DATE(t.fechapagobind)
-                AND s2.estatus_aprobacion = 'Aprobado'
-                )
-            AND DATE(t.fechapagobind) = :fecha 
+            WHERE DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 0
             GROUP BY p.id, p.razonsocial, p.cbu, u.nombre 
         ";
