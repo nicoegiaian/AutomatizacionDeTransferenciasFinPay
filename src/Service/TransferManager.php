@@ -150,33 +150,47 @@ class TransferManager
 
                 } else {
                     try {
-                        $res = $this->bindService->transferToThirdParty($pdv['cbu'], $pdv['monto']);
-                        $bindId = $res['comprobanteId'] ?? 'OK-NO-ID';
-                        $coelsaId = $res['coelsaId'] ?? null;
                         
-                        $this->updateTransactionStatus($pdv['transacciones_ids'], 'COMPLETADA', $bindId, $coelsaId);
-                        $detallePdv['estado'] = 'ENVIADA';
-                        
-                        // AGREGADO: Loguear éxito real (Opcional, pero recomendado para auditoría)
-                        if ($this->enableRealTransfer) {
-                             $this->logDetallado("ÉXITO REAL PDV-$razonSocial", "Transferencia enviada correctamente.\nID Bind: $bindId\n$jsonLogPdv");
+                            $res = $this->bindService->transferToThirdParty(
+                            $pdv['cbu'], 
+                            $pdv['monto'], 
+                            null, // Origen default
+                            $this->enableRealTransfer // <--- Flag local de TransferManager
+                        );
+
+                        // CHEQUEO DE RESPUESTA
+                        if (isset($res['estado']) && $res['estado'] === 'SIMULATED') {
+                            // --- CASO SIMULACIÓN ---
+                            $this->logDetallado("SIMULACIÓN PDV-$razonSocial", "Payload simulado:\n" . json_encode($res['payload_debug'] ?? [], JSON_PRETTY_PRINT));
+                            
+                            $this->updateTransactionStatus($pdv['transacciones_ids'], 'AUDIT_COMPLETED', 'MOCK-ID-' . time(), null, true);
+                            $detallePdv['estado'] = 'SIMULADA (DRY RUN)';
+                            
+                        } else {
+                            // --- CASO REAL ---
+                            $bindId = $res['comprobanteId'] ?? 'OK-NO-ID';
+                            $coelsaId = $res['coelsaId'] ?? null;
+                            
+                            $this->updateTransactionStatus($pdv['transacciones_ids'], 'COMPLETADA', $bindId, $coelsaId);
+                            $detallePdv['estado'] = 'ENVIADA';
+                            
+                            // Log de éxito real
+                            $this->logDetallado("ÉXITO REAL PDV-$razonSocial", "ID Bind: $bindId");
                         }
 
-                    } catch (\App\Exception\DryRunException $e) {
-                         // CORREGIDO: Usar Razón Social en el título
-                         $this->logDetallado("SIMULACIÓN PDV-$razonSocial", $e->getMessage() . "\n" . $jsonLogPdv);
-                         
-                         $this->updateTransactionStatus($pdv['transacciones_ids'], 'AUDIT_COMPLETED', 'MOCK-ID-' . time(), null, true);
-                         $detallePdv['estado'] = 'SIMULADA (DRY RUN)';
 
                     } catch (\Exception $e) {
-                         $erroresPdv++;
-                         $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '', false, $e->getMessage());
-                         $detallePdv['estado'] = 'ERROR: ' . $e->getMessage();
-                         
-                         // AGREGADO: Loguear el error de API en el archivo
-                         $this->logDetallado("ERROR API PDV-$razonSocial", "Excepción: " . $e->getMessage() . "\nDatos:\n$jsonLogPdv");
-                    }
+                        // ERRORES REALES DE API
+                        $erroresPdv++;
+                        $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '', false, $e->getMessage());
+                        $detallePdv['estado'] = 'ERROR: ' . $e->getMessage();
+                        $this->logDetallado("ERROR API PDV-$razonSocial", $e->getMessage());
+                    } catch (\App\Exception\DryRunException $e) {
+                        $this->updateTransactionStatus($pdv['transacciones_ids'], 'TRANSFERENCIA DRY RUN ', '', '', false, $e->getMessage());
+                        $this->logDetallado("SIMULACIÓN PDV-$nombreUnidad", $e->getMessage() . "\n" . $jsonLog);
+                        $detalleFab['estado'] = 'SIMULADA (DRY RUN)';
+                        $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
+                    } 
                 }
                 
                 $agrupadorPorUnidad[$nombreUnidad]['pdvs'][] = $detallePdv;
@@ -234,22 +248,32 @@ class TransferManager
                 } else {
                     try {
                         // Intentamos Transferir
-                        $resFab = $this->bindService->transferToThirdParty($cbuUnidad, $montoUnidad);
-                        
+                            $resFab = $this->bindService->transferToThirdParty(
+                            $cbuUnidad, 
+                            $montoUnidad,
+                            null, // Origen por defecto
+                            $this->enableRealTransfer // <--- Flag local de TransferManager
+                        );                        
                         // LÓGICA DE UPDATE DE ESTADO
-                        if (!$this->enableRealTransfer) {
-                            // Dry Run
+                        if (isset($resFab['estado']) && $resFab['estado'] === 'SIMULATED') {
+                            // --- CASO SIMULADO ---
+                            // Marcamos en BD (lógica específica de fabricante)
                             $this->updateFabricanteStatus($unidad['transacciones_ids_csv'] ?? '');
-                            $this->logDetallado("SIMULACIÓN FAB-$nombreUnidad", $jsonLog);
+                            
+                            $this->logDetallado("SIMULACIÓN FAB-$nombreUnidad", "Payload simulado:\n" . json_encode($resFab['payload_debug'] ?? [], JSON_PRETTY_PRINT));
                             $detalleFab['estado'] = 'SIMULADA (DRY RUN)';           
                             $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
+                            
                         } else {
-                            // Real
+                            // --- CASO REAL ---
                             $this->updateFabricanteStatus($unidad['transacciones_ids_csv'] ?? '');
-                            $this->logger->info("    -> OK Fab $nombreUnidad");
+                            
+                            $bindId = $resFab['comprobanteId'] ?? 'OK-NO-ID';
+                            $this->logger->info("    -> OK Fab $nombreUnidad (ID: $bindId)");
+                            
                             $detalleFab['estado'] = 'ENVIADA';
                             $detalleMouraLog[$nombreUnidad] = 'OK';
-                            $this->logDetallado("ÉXITO REAL FAB-$nombreUnidad", $jsonLog);
+                            $this->logDetallado("ÉXITO REAL FAB-$nombreUnidad", "ID BIND: $bindId\n$jsonLog");
                         }
 
                     } catch (\App\Exception\DryRunException $e) {
@@ -258,10 +282,13 @@ class TransferManager
                         $detalleFab['estado'] = 'SIMULADA (DRY RUN)';
                         $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
                     } catch (\Exception $e) {
+                        // --- CASO ERROR DE API ---
                         $erroresMoura++;
-                        $errorMsg = "EXCEPCIÓN API (FALLO REAL):\n" . $e->getMessage() . "\n\nDATOS DEL INTENTO:\n" . $jsonLog;
+                        $errorMsg = "EXCEPCIÓN API:\n" . $e->getMessage() . "\n\nDATOS DEL INTENTO:\n" . $jsonLog;
+                        
                         $this->logDetallado("ERROR CRÍTICO FAB-$nombreUnidad", $errorMsg);
                         $this->logger->error("    -> FALLO Unidad $nombreUnidad: " . $e->getMessage());
+                        
                         $detalleFab['estado'] = 'ERROR: ' . $e->getMessage();
                         $detalleMouraLog[$nombreUnidad] = 'ERROR_API: ' . $e->getMessage();
                     }

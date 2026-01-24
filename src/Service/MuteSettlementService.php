@@ -104,54 +104,52 @@ class MuteSettlementService
             // -------------------------------------------------------
             $cvuOrigenConfirmado = $this->cvuOrigen; 
 
-            if ($this->enableRealTransfer) {
-                // --- MODO REAL ---
+            // 1. Transferencia a Tercero
+            if ($paraTercero > 0) {
+                $this->logger->info("Iniciando proceso transferencia Tercero ($paraTercero)...");
                 
-                // Transferencia 1: Tercero
-                if ($paraTercero > 0) {
-                    $this->logger->info("Transfiriendo a Tercero ($paraTercero) desde {$this->cvuOrigen}...");
-                    
-                    $res1 = $this->bindService->transferToThirdParty(
-                        $this->cvuTercero, 
-                        $paraTercero, 
-                        $this->cvuOrigen 
-                    );
-                    
+                // PASAMOS EL FLAG DE ESTE SERVICIO
+                $res1 = $this->bindService->transferToThirdParty(
+                    $this->cvuTercero, 
+                    $paraTercero, 
+                    $this->cvuOrigen,
+                    $this->enableRealTransfer // <--- Aquí la magia
+                );
+                
+                // Analizamos la respuesta
+                if (isset($res1['estado']) && $res1['estado'] === 'SIMULATED') {
+                    $idsBind['tercero'] = 'SIMULACION';
+                    $this->logger->info("[DRY RUN] Simulación Tercero OK. Payload: " . json_encode($res1['payload_debug']));
+                    $estadoFinal = 'AUDIT_COMPLETED'; // Marcamos el lote como auditoría
+                } else {
                     $idsBind['tercero'] = $res1['comprobanteId'] ?? 'ENVIADO';
-                    // CAPTURAMOS EL ORIGEN REAL USADO
-                    if (isset($res1['audit_cvu_origen'])) {
-                        $cvuOrigenConfirmado = $res1['audit_cvu_origen'];
-                        $this->logger->info("Transferencia a Tercero EXITOSA desde: $cvuOrigenConfirmado");
-                    }
+                    $this->logger->info("Transferencia REAL Tercero OK. ID: " . $idsBind['tercero']);
                 }
 
-                // Transferencia 2: Pagos Digitales
-                if ($paraPD > 0) {
-                    $this->logger->info("Transfiriendo a PagosDigitales ($paraPD) desde {$this->cvuOrigen}...");
-                    
-                    $res2 = $this->bindService->transferToThirdParty(
-                        $this->cvuPagosDigitales, 
-                        $paraPD, 
-                        $this->cvuOrigen
-                    );
-                    
+                if (isset($res1['audit_cvu_origen'])) {
+                    $cvuOrigenConfirmado = $res1['audit_cvu_origen'];
+                }
+            }
+
+            // 2. Transferencia a PD
+            if ($paraPD > 0) {
+                $this->logger->info("Iniciando proceso transferencia PD ($paraPD)...");
+                
+                $res2 = $this->bindService->transferToThirdParty(
+                    $this->cvuPagosDigitales, 
+                    $paraPD, 
+                    $this->cvuOrigen,
+                    $this->enableRealTransfer // <--- Flag local
+                );
+                
+                if (isset($res2['estado']) && $res2['estado'] === 'SIMULATED') {
+                    $idsBind['pd'] = 'SIMULACION';
+                    $this->logger->info("[DRY RUN] Simulación PD OK.");
+                    $estadoFinal = 'AUDIT_COMPLETED';
+                } else {
                     $idsBind['pd'] = $res2['comprobanteId'] ?? 'ENVIADO';
-                    if (isset($res2['audit_cvu_origen'])) {
-                        $cvuOrigenConfirmado = $res2['audit_cvu_origen'];
-                    }
+                    $this->logger->info("Transferencia REAL PD OK. ID: " . $idsBind['pd']);
                 }
-
-            } else {
-                // --- MODO PRUEBA (DRY RUN) ---
-                $this->logger->info("[DRY RUN] Modo prueba activo. NO se ejecutan transferencias.");
-                $this->logger->info("[DRY RUN] Se hubiera transferido a Tercero: $paraTercero");
-                $this->logger->info("[DRY RUN] Se hubiera transferido a PD: $paraPD");
-
-                $idsBind['tercero'] = 'SIMULACION'; 
-                $idsBind['pd'] = 'SIMULACION';
-                $cvuOrigenConfirmado = $this->cvuOrigen . ' (Simulado)';
-                // Cambiamos el estado para la BD
-                $estadoFinal = 'AUDIT_COMPLETED';
             }
 
             // 4. Persistir en BD

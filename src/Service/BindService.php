@@ -19,9 +19,7 @@ class BindService implements BindServiceInterface
     private string $scope;
     private ?string $accessToken = null;
     private string $cvuOrigen;  
-    private bool $enableRealTransfer;
     
-    // Symfony inyecta el HttpClient y las credenciales del .env
     public function __construct(
         HttpClientInterface $httpClient, 
         string $BIND_CLIENT_ID, 
@@ -29,8 +27,7 @@ class BindService implements BindServiceInterface
         string $BIND_API_URL,
         string $BIND_CVU_ORIGEN,
         string $BIND_TOKEN_URL,
-        string $BIND_SCOPE,
-        bool $BIND_ENABLE_REAL_TRANSFER
+        string $BIND_SCOPE
     ) {
         $this->httpClient = $httpClient;
         $this->clientId = $BIND_CLIENT_ID;
@@ -39,7 +36,6 @@ class BindService implements BindServiceInterface
         $this->cvuOrigen = $BIND_CVU_ORIGEN;
         $this->tokenUrl = $BIND_TOKEN_URL;
         $this->scope = $BIND_SCOPE;
-        $this->enableRealTransfer = $BIND_ENABLE_REAL_TRANSFER;
     }
 
     /**
@@ -142,18 +138,15 @@ class BindService implements BindServiceInterface
     }
     
     /**
-     * Realiza la transferencia PUSH a un tercero.
-     * @param string $cbuDestino CBU/CVU del destinatario.
-     * @param float $monto Monto a transferir.
-     * @param string|null $cvuOrigen (Opcional) CVU desde donde salen los fondos. Si es null, usa el default.
+     * Realiza la transferencia o Simula según $isRealTransfer.
+     * @param bool $isRealTransfer Si es FALSE, simula y devuelve array con estado 'SIMULATED'.
      */
-    public function transferToThirdParty(string $cbuDestino, float $monto, ?string $cvuOrigen = null): array
+    public function transferToThirdParty(string $cbuDestino, float $monto, ?string $cvuOrigen = null, bool $isRealTransfer = false): array
     {
-        $token = $this->getAccessToken(); // Obtener token
+        $token = $this->getAccessToken(); 
         $origenAUtilizar = $cvuOrigen ?? $this->cvuOrigen;
         $referencia = 'TRF-' . time() . '-' . rand(1000, 9999);
 
-        // Formato requerido por la API: https://psp.bind.com.ar/developers/apis/realizar-una-transferencia
         $payload = [
             'cvu_Origen' => $origenAUtilizar, 
             'cbu_cvu_destino' => $cbuDestino,
@@ -162,19 +155,19 @@ class BindService implements BindServiceInterface
             'concepto' => 'VAR',
         ];
 
-        if (!$this->enableRealTransfer) {
-            // Empaquetamos todo lo que íbamos a mandar y lanzamos la excepción
-            $debugData = [
-                'origen_usado' => $origenAUtilizar, 
-                'url' => $this->apiUrl . self::TRANSFER_ENDPOINT,
-                'token_preview' => substr($token, 0, 10) . '...',
-                'payload' => $payload
+        // LOGICA CENTRAL DE SIMULACIÓN
+        if (!$isRealTransfer) {
+            // En lugar de Exception, devolvemos una estructura de éxito simulado
+            return [
+                'estado' => 'SIMULATED', // Flag clave para quien llama
+                'mensaje' => 'Transferencia simulada correctamente (DRY RUN)',
+                'comprobanteId' => 'SIM-' . time() . '-DRY',
+                'audit_cvu_origen' => $origenAUtilizar, // Para que el log registre "origen simulado"
+                'payload_debug' => $payload // Para que el caller pueda loguear qué hubiera mandado
             ];
-            
-            // Lanzamos la excepción para que TransferManager la atrape
-            throw new \App\Exception\DryRunException(json_encode($debugData, JSON_PRETTY_PRINT));
         }
         
+        // MODO REAL
         $url = $this->apiUrl . self::TRANSFER_ENDPOINT;
 
         $response = $this->httpClient->request('POST', $url, [
@@ -188,12 +181,15 @@ class BindService implements BindServiceInterface
         $statusCode = $response->getStatusCode();
         $data = $response->toArray(false);
         
-        // Lógica de manejo de errores de BIND
         if ($statusCode !== 201 && $statusCode !== 200) {
-            $errorDetalle = $data['mensaje'] ?? $data['errores'][0]['detalle'] ?? json_encode($data['errores'] ?? $data);
-            throw new \RuntimeException($errorDetalle);
+            $rawError = $response->getContent(false);
+            $errorDetalle = $data['mensaje'] ?? $data['errores'][0]['detalle'] ?? $rawError;
+            // Aquí SI lanzamos excepción porque falló un intento REAL (o la API respondió mal)
+            throw new \RuntimeException("BIND API Error: " . $errorDetalle);
         }
+        
         $data['audit_cvu_origen'] = $origenAUtilizar;
+        $data['estado'] = 'COMPLETED'; // Normalizamos el estado para facilitar chequeos
         return $data;
     }
 }
