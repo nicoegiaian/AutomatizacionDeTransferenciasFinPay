@@ -46,7 +46,6 @@ services:
             $BIND_CVU_ORIGEN: '%env(BIND_CVU_ORIGEN)%'
             $BIND_TOKEN_URL: '%env(BIND_TOKEN_URL)%'
             $BIND_SCOPE: '%env(BIND_SCOPE)%' 
-            $BIND_ENABLE_REAL_TRANSFER: '%env(bool:BIND_ENABLE_REAL_TRANSFER)%' 
 
     App\Service\BindServiceInterface: '@App\Service\BindService'
 
@@ -56,6 +55,7 @@ services:
             $finpaySettlementLogger: '@monolog.logger.finpay_settlement'
             $logFilePath: '%kernel.logs_dir%/transferencias_diarias.log'
             $BIND_ENABLE_REAL_TRANSFER: '%env(bool:BIND_ENABLE_REAL_TRANSFER)%'
+            $jsonLogger: '@monolog.logger.bind_json'
     
     App\Service\MuteSettlementService:
         arguments:
@@ -64,6 +64,7 @@ services:
             $dbConnection: '@doctrine.dbal.default_connection'
             $logger: '@monolog.logger.mute_automation'
             $reportLogger: '@monolog.logger.mute_reports' 
+            $jsonLogger: '@monolog.logger.bind_json' 
             $logFilePath: '%kernel.logs_dir%/automatizacion_mute.log'
             $cvuOrigen: '%env(MUTE_CVU_ORIGEN)%'
             $cvuTercero: '%env(MUTE_CVU_TERCERO)%'

@@ -1,5 +1,5 @@
 monolog:
-    channels: ['finpay_settlement', 'mute_automation', 'mute_reports'] # 1. Definimos el canal personalizado
+    channels: ['finpay_settlement', 'mute_automation', 'mute_reports', 'bind_json']
 
     handlers:
         # ... otros handlers existentes (main, console, etc.) ...
@@ -26,4 +26,11 @@ monolog:
             path: "%kernel.logs_dir%/reporte_mensual_mute.log" # <--- Archivo separado
             level: info
             channels: ["mute_reports"] # Solo escucha este canal
+            formatter: monolog.formatter.line
+        
+        bind_json_handler:
+            type: stream
+            path: "%kernel.logs_dir%/respuesta_bind_json.log" # <--- Archivo separado
+            level: info
+            channels: ["bind_json"]
             formatter: monolog.formatter.line

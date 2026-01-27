@@ -14,8 +14,8 @@ class MuteSettlementService
     private Connection $db;
     private LoggerInterface $logger;
     private LoggerInterface $reportLogger; 
+    private LoggerInterface $jsonLogger;
     private string $logFilePath;
-
     private string $cvuOrigen;
     private string $cvuTercero;
     private string $cvuPagosDigitales;
@@ -30,6 +30,7 @@ class MuteSettlementService
         Connection $dbConnection,
         LoggerInterface $logger,
         LoggerInterface $reportLogger,
+        LoggerInterface $jsonLogger,
         string $logFilePath,
         string $cvuOrigen,
         string $cvuTercero,
@@ -44,6 +45,7 @@ class MuteSettlementService
         $this->db = $dbConnection;
         $this->logger = $logger;
         $this->reportLogger = $reportLogger; 
+        $this->jsonLogger = $jsonLogger;
         $this->logFilePath = $logFilePath;
         $this->cvuOrigen = $cvuOrigen;
         $this->cvuTercero = $cvuTercero;
@@ -115,7 +117,11 @@ class MuteSettlementService
                     $this->cvuOrigen,
                     $this->enableRealTransfer // <--- Aquí la magia
                 );
-                
+                $this->jsonLogger->info("RESPUESTA TERCERO:", [
+                    'monto' => $paraTercero,
+                    'destino' => $this->cvuTercero,
+                    'respuesta_api' => $res1 // Monolog guardará esto como JSON automáticamente
+                ]);
                 // Analizamos la respuesta
                 if (isset($res1['estado']) && $res1['estado'] === 'SIMULATED') {
                     $idsBind['tercero'] = 'SIMULACION';
@@ -142,6 +148,12 @@ class MuteSettlementService
                     $this->enableRealTransfer // <--- Flag local
                 );
                 
+                $this->jsonLogger->info("RESPUESTA PD:", [
+                    'monto' => $paraPD,
+                    'destino' => $this->cvuPagosDigitales,
+                    'respuesta_api' => $res2
+                ]);
+
                 if (isset($res2['estado']) && $res2['estado'] === 'SIMULATED') {
                     $idsBind['pd'] = 'SIMULACION';
                     $this->logger->info("[DRY RUN] Simulación PD OK.");

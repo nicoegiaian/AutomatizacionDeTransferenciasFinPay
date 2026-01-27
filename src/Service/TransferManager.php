@@ -15,10 +15,19 @@ class TransferManager
     private Notifier $notifier;
     private Connection $dbConnection; 
     private LoggerInterface $logger;
+    private LoggerInterface $jsonLogger;
     private string $logFilePath; 
     private bool $enableRealTransfer;
 
-    public function __construct(BindServiceInterface $bindService, Notifier $notifier, Connection $defaultConnection, LoggerInterface $finpaySettlementLogger, string $logFilePath, bool $BIND_ENABLE_REAL_TRANSFER)
+    public function __construct(
+        BindServiceInterface $bindService, 
+        Notifier $notifier, 
+        Connection $defaultConnection, 
+        LoggerInterface $finpaySettlementLogger, 
+        string $logFilePath, 
+        bool $BIND_ENABLE_REAL_TRANSFER,
+        LoggerInterface $jsonLogger 
+        )
     {
         $this->bindService = $bindService;
         $this->notifier = $notifier;
@@ -26,7 +35,8 @@ class TransferManager
         $this->logger = $finpaySettlementLogger;
         $this->logFilePath = $logFilePath;
         $this->enableRealTransfer = $BIND_ENABLE_REAL_TRANSFER;
-    }
+        $this->jsonLogger = $jsonLogger;
+        }
 
     /**
      * Ejecuta el proceso de transferencia PUSH (PDVs y Multi-Fabricante).
@@ -157,6 +167,11 @@ class TransferManager
                             null, // Origen default
                             $this->enableRealTransfer // <--- Flag local de TransferManager
                         );
+                        $this->jsonLogger->info("RESPUESTA PDV ({$razonSocial}):", [
+                            'monto' => $pdv['monto'],
+                            'destino' => $pdv['cbu'],
+                            'respuesta_api' => $res
+                        ]);
 
                         // CHEQUEO DE RESPUESTA
                         if (isset($res['estado']) && $res['estado'] === 'SIMULATED') {
@@ -181,6 +196,7 @@ class TransferManager
 
                     } catch (\Exception $e) {
                         // ERRORES REALES DE API
+                        $this->jsonLogger->error("FALLO PDV ({$razonSocial}): " . $e->getMessage());
                         $erroresPdv++;
                         $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '', false, $e->getMessage());
                         $detallePdv['estado'] = 'ERROR: ' . $e->getMessage();
@@ -253,7 +269,12 @@ class TransferManager
                             $montoUnidad,
                             null, // Origen por defecto
                             $this->enableRealTransfer // <--- Flag local de TransferManager
-                        );                        
+                        );            
+                        $this->jsonLogger->info("RESPUESTA FABRICANTE ({$nombreUnidad}):", [
+                            'monto' => $montoUnidad,
+                            'destino' => $cbuUnidad,
+                            'respuesta_api' => $resFab
+                        ]);            
                         // LÓGICA DE UPDATE DE ESTADO
                         if (isset($resFab['estado']) && $resFab['estado'] === 'SIMULATED') {
                             // --- CASO SIMULADO ---
@@ -283,6 +304,7 @@ class TransferManager
                         $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
                     } catch (\Exception $e) {
                         // --- CASO ERROR DE API ---
+                        $this->jsonLogger->error("FALLO FABRICANTE ({$nombreUnidad}): " . $e->getMessage());
                         $erroresMoura++;
                         $errorMsg = "EXCEPCIÓN API:\n" . $e->getMessage() . "\n\nDATOS DEL INTENTO:\n" . $jsonLog;
                         
