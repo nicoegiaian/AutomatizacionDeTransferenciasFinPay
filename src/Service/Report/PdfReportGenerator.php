@@ -36,14 +36,16 @@ class PdfReportGenerator
         $this->outputDir = $outputDir;
     }
 
-    // --- Métodos Privados de Utilidad ---
-
     private function getBase64Image(string $relativePath): string
     {
         $path = $this->projectDir . '/public/' . $relativePath;
-        if (!file_exists($path)) {
-            return ''; // O retornar una imagen transparente por defecto
-        }
+        if (!file_exists($path)) return '';
+        return base64_encode(file_get_contents($path));
+    }
+    
+    private function getBase64Font(): string {
+        $path = $this->projectDir . '/public/fonts/AmasisMTPro-Light.ttf';
+        if (!file_exists($path)) return '';
         return base64_encode(file_get_contents($path));
     }
 
@@ -61,7 +63,6 @@ class PdfReportGenerator
 
     private function getTargetDir(int $month, int $year): string
     {
-        // Construye ruta: /var/www/html/portal/resumenes/2025/11_Nov
         $folderName = self::MESES_CARPETA[$month];
         $dir = sprintf('%s/%d/%s', $this->outputDir, $year, $folderName);
         if (!$this->filesystem->exists($dir)) {
@@ -70,11 +71,105 @@ class PdfReportGenerator
         return $dir;
     }
 
-    // --- Métodos Públicos ---
-
-    public function generatePdvReport(array $data, int $month, int $year): string
+    // --- CORRECCIÓN AQUÍ: Renombrado a generateMouraFullReport ---
+    public function generateMouraFullReport(array $summaryData, array $pdvFilesMap, int $month, int $year): string
     {
-        // 1. Preparar imágenes para inyectar (evita líos de rutas en CLI)
+        // 1. Preparar recursos comunes (imágenes y fuentes)
+        $images = [
+            'encabezado' => $this->getBase64Image('img/encabezado.png'),
+            'pie' => $this->getBase64Image('img/pie.png')
+        ];
+        $fontAmasis = $this->getBase64Font();
+        $targetDir = $this->getTargetDir($month, $year);
+
+        // Inicializamos FPDI para unir todo
+        $pdf = new Fpdi();
+
+        // --- PASO 1: Carátula Global (Hoja 1) ---
+        $htmlGlobal = $this->twig->render('reports/moura_summary.html.twig', [
+            'report' => $summaryData['global'],
+            'type' => 'summary', 
+            'images' => $images,
+            'font_amasis' => $fontAmasis
+        ]);
+        $this->appendHtmlToPdf($pdf, $htmlGlobal);
+
+        // --- PASO 2: Separador "Apertura" (Hoja 2) ---
+        $htmlSep1 = $this->twig->render('reports/moura_summary.html.twig', [
+            'title_separator' => 'Apertura por Unidad de Negocio',
+            'type' => 'separator', 
+            'images' => $images,
+            'font_amasis' => $fontAmasis
+        ]);
+        $this->appendHtmlToPdf($pdf, $htmlSep1);
+
+        // --- PASO 3: Iterar Unidades ---
+        foreach ($summaryData['units'] as $unidadNombre => $unitData) {
+            
+            // a) Carátula de Unidad
+            $htmlUnit = $this->twig->render('reports/moura_summary.html.twig', [
+                'report' => $unitData,
+                'type' => 'summary',
+                'images' => $images,
+                'font_amasis' => $fontAmasis
+            ]);
+            $this->appendHtmlToPdf($pdf, $htmlUnit);
+
+            // b) Separador "ANEXO"
+            $htmlSepAnexo = $this->twig->render('reports/moura_summary.html.twig', [
+                'title_separator' => 'ANEXO: Detalle por punto de venta',
+                'type' => 'separator',
+                'images' => $images,
+                'font_amasis' => $fontAmasis
+            ]);
+            $this->appendHtmlToPdf($pdf, $htmlSepAnexo);
+
+            // c) Adjuntar PDFs de los Puntos de Venta
+            if (isset($pdvFilesMap[$unidadNombre])) {
+                foreach ($pdvFilesMap[$unidadNombre] as $pdvFile) {
+                    if (file_exists($pdvFile)) {
+                        $this->appendExistingPdfToPdf($pdf, $pdvFile);
+                    }
+                }
+            }
+        }
+
+        // Guardar archivo final
+        $outputPath = $targetDir . '/MOURA_REPORTE_MENSUAL.pdf';
+        $pdf->Output('F', $outputPath);
+
+        return $outputPath;
+    }
+
+    private function appendHtmlToPdf(Fpdi $pdf, string $html): void {
+        $content = $this->renderPdf($html);
+        $tmpFile = tempnam(sys_get_temp_dir(), 'dompdf_frag');
+        file_put_contents($tmpFile, $content);
+
+        try {
+            $pageCount = $pdf->setSourceFile($tmpFile);
+            for ($i = 1; $i <= $pageCount; $i++) {
+                $tplId = $pdf->importPage($i);
+                $pdf->AddPage();
+                $pdf->useTemplate($tplId);
+            }
+        } catch (\Exception $e) { }
+        @unlink($tmpFile);
+    }
+
+    private function appendExistingPdfToPdf(Fpdi $pdf, string $path): void {
+        try {
+            $pageCount = $pdf->setSourceFile($path);
+            for ($i = 1; $i <= $pageCount; $i++) {
+                $tplId = $pdf->importPage($i);
+                $pdf->AddPage();
+                $pdf->useTemplate($tplId);
+            }
+        } catch (\Exception $e) { }
+    }
+
+     public function generatePdvReport(array $data, int $month, int $year): string
+    {
         $images = [
             'encabezado' => $this->getBase64Image('img/encabezado.png'),
             'pie' => $this->getBase64Image('img/pie.png')
@@ -87,14 +182,12 @@ class PdfReportGenerator
             $fontBase64 = base64_encode(file_get_contents($fontPath));
         }
 
-        // 2. Renderizar HTML
         $html = $this->twig->render('reports/pdv_settlement.html.twig', [
             'report' => $data,
             'images' => $images,
             'font_amasis' => $fontBase64 
         ]);
 
-        // 3. Generar y Guardar
         $pdfContent = $this->renderPdf($html);
         
         $mesCorto = self::MESES_CORTO[$month];
@@ -106,102 +199,5 @@ class PdfReportGenerator
 
         file_put_contents($fullPath, $pdfContent);
         return $fullPath;
-    }
-
-    public function generateMouraCover(array $totals, int $month, int $year): string
-    {
-        // 1. Cargar Imágenes (lo que ya tenías)
-        $images = [
-            'encabezado' => $this->getBase64Image('img/encabezado.png'),
-            'pie' => $this->getBase64Image('img/pie.png')
-        ];
-
-        // 2. NUEVO: Cargar Fuente Amasis
-        // Asumiendo que el archivo se llama "Amasis MT Std Light.ttf"
-        $fontPath = $this->projectDir . '/public/fonts/Amasis MT Std Light.ttf';
-        $fontBase64 = '';
-        
-        if (file_exists($fontPath)) {
-            $fontBase64 = base64_encode(file_get_contents($fontPath));
-        }
-
-        // 3. Renderizar (Pasamos la variable 'font_amasis')
-        $html = $this->twig->render('reports/moura_summary.html.twig', [
-            'report' => $totals,
-            'images' => $images,
-            'font_amasis' => $fontBase64 // <--- Nueva Variable
-        ]);
-
-        $pdfContent = $this->renderPdf($html);
-        
-        // ... (resto del código igual)
-        $tempPath = $this->getTargetDir($month, $year) . '/_temp_moura_cover.pdf';
-        file_put_contents($tempPath, $pdfContent);
-        
-        return $tempPath;
-    }
-
-    public function generateMouraAnnex(string $coverPath, array $pdvFiles, int $month, int $year): string
-    {
-        $pdf = new Fpdi();
-        
-        // --- PASO 1: LA CARÁTULA (Resumen Moura) ---
-        if (file_exists($coverPath)) {
-            try {
-                $pageCount = $pdf->setSourceFile($coverPath);
-                for ($pageNo = 1; $pageNo <= $pageCount; $pageNo++) {
-                    $templateId = $pdf->importPage($pageNo);
-                    $pdf->AddPage(); // Agrega la página
-                    $pdf->useTemplate($templateId);
-                }
-            } catch (\Exception $e) {
-                // Manejo de error si falla la carátula
-            }
-        }
-
-        // --- PASO 2: EL SEPARADOR (Nueva hoja generada al vuelo) ---
-        $pdf->AddPage(); // Crea una hoja blanca nueva
-        
-        // Configuramos fuente Helvética, Negrita, tamaño 20
-        $pdf->SetFont('Helvetica', 'B', 20);
-        
-        // Escribimos el texto centrado
-        // Los parámetros son: (width, height, text, border, ln, align)
-        // Usamos Cell(0, ...) para que ocupe todo el ancho y 'C' para centrar
-        
-        // Bajamos un poco el cursor para que quede verticalmente mejor (aprox mitad de hoja A4)
-        $pdf->SetY(130); 
-        $pdf->Cell(0, 10, 'Detalles por punto de Venta', 0, 1, 'C');
-
-
-        // --- PASO 3: LOS ANEXOS (PDFs individuales) ---
-        foreach ($pdvFiles as $file) {
-            if (!file_exists($file)) continue;
-            try {
-                $pageCount = $pdf->setSourceFile($file);
-                for ($pageNo = 1; $pageNo <= $pageCount; $pageNo++) {
-                    $templateId = $pdf->importPage($pageNo);
-                    $pdf->AddPage();
-                    $pdf->useTemplate($templateId);
-                }
-            } catch (\Exception $e) { continue; }
-        }
-
-        // Eliminar carátula temporal
-        if ($this->filesystem->exists($coverPath)) {
-            $this->filesystem->remove($coverPath);
-        }
-
-        // --- PASO 4: NOMBRE DEL ARCHIVO (Moura mmm aa) ---
-        // Ejemplo: Moura Nov 25
-        $mesTexto = self::MESES_CORTO[$month]; // "Nov"
-        $anioCorto = substr((string)$year, -2); // "25"
-        
-        $filename = sprintf('MOURA %s %s.pdf', $mesTexto, $anioCorto);
-        $outputPath = $this->getTargetDir($month, $year) . '/' . $filename;
-
-        $pdf->Output('F', $outputPath);
-
-        return $outputPath;
     }
 }

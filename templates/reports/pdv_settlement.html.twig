@@ -86,7 +86,6 @@
                 <td style="text-align: right; padding-left: 0;">{{ report.items.credito.monto|number_format(2,',','.') }}</td>
             </tr>
 
-            {% if report.items.qr.cant > 0 %}
             <tr>
                 <td style="font-weight: bold;">Ventas con QR</td>
                 <td style="text-align: left;">{{ report.items.qr.cant }}</td>
@@ -94,7 +93,14 @@
                 <td style="text-align: right; padding-right: 2px;">$</td>
                 <td style="text-align: right; padding-left: 0;">{{ report.items.qr.monto|number_format(2,',','.') }}</td>
             </tr>
-            {% endif %}
+
+            <tr>
+                <td style="font-weight: bold;">Ventas con Prepago</td>
+                <td style="text-align: left;">{{ report.items.prepago.cant }}</td>
+                <td></td>
+                <td style="text-align: right; padding-right: 2px;">$</td>
+                <td style="text-align: right; padding-left: 0;">{{ report.items.prepago.monto|number_format(2,',','.') }}</td>
+            </tr>
 
             <tr>
                 <td style="font-weight: bold;">Devoluciones</td>

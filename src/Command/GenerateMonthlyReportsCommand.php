@@ -12,7 +12,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 #[AsCommand(
     name: 'app:generate-monthly-reports',
-    description: 'Genera reportes PDF mensuales en la carpeta externa configurada.',
+    description: 'Genera reportes PDF mensuales y el anexo consolidado de Moura.',
 )]
 class GenerateMonthlyReportsCommand extends Command
 {
@@ -43,22 +43,40 @@ class GenerateMonthlyReportsCommand extends Command
         if ($input->getOption('year')) {
             $year = (int)$input->getOption('year');
         } else {
-            // Si modificamos $now arriba, el año ya podría haber cambiado (ej: Enero -> Diciembre año anterior)
             $year = (int)$now->format('Y'); 
         }
 
         $output->writeln("=== Iniciando Generación: $month / $year ===");
 
         try {
-            // 2. Obtener Datos
+            // ---------------------------------------------------------
+            // PASO CLAVE: TRAEMOS TODOS LOS DATOS DE LA BD AL PRINCIPIO
+            // ---------------------------------------------------------
+            
+            // A. Datos Individuales
+            $output->writeln("Consultando datos individuales...");
             $data = $this->settlementService->getMonthlyData($month, $year);
             $count = count($data);
             $output->writeln("Comercios con movimientos: $count");
 
-            if ($count === 0) return Command::SUCCESS;
+            if ($count === 0) {
+                $output->writeln("No hay datos para procesar.");
+                return Command::SUCCESS;
+            }
 
-            // 3. Generar Individuales
-            $generatedFiles = [];
+            // B. Datos Agrupados (Moura) - LO HACEMOS AHORA PARA EVITAR EL TIMEOUT DE MYSQL
+            // Si lo dejamos para el final, la conexión puede morir mientras generamos los PDFs.
+            $output->writeln("Consultando resúmenes de Moura...");
+            $mouraSummaries = $this->settlementService->getMouraSummaries($month, $year);
+
+            // ---------------------------------------------------------
+            // FIN DE INTERACCIÓN CON BD - AHORA SOLO PROCESAMIENTO PHP
+            // ---------------------------------------------------------
+
+            // 3. Generar Individuales y Agrupar por Unidad
+            $generatedFiles = [];       
+            $pdvFilesMap = [];          
+            
             $limit = $input->getOption('test-one') ? 1 : 999999;
             $i = 0;
 
@@ -69,27 +87,44 @@ class GenerateMonthlyReportsCommand extends Command
                 }
 
                 $razon = $pdvData['header']['razon_social'];
-                $path = $this->pdfGenerator->generatePdvReport($pdvData, $month, $year);
-                $generatedFiles[] = $path;
                 
-                $output->writeln(" -> OK: $razon");
+                // Generamos el PDF individual (Esto tarda, pero ya no importa si se cae la BD)
+                $path = $this->pdfGenerator->generatePdvReport($pdvData, $month, $year);
+                
+                $generatedFiles[] = $path;
+
+                // Agrupación
+                $unidad = $pdvData['header']['unidad_de_negocio'] ?? 'Sin Unidad';
+                
+                if (!isset($pdvFilesMap[$unidad])) {
+                    $pdvFilesMap[$unidad] = [];
+                }
+                $pdvFilesMap[$unidad][] = $path;
+                
+                $output->writeln(" -> OK [$unidad]: $razon");
                 $i++;
             }
 
-            // 4. Generar Anexo Moura (Solo si no estamos en test simple, o sí, para probar la carátula)
+            // 4. Generar Reporte Full Moura (Usando los datos que trajimos al principio)
             if ($i > 0) {
-                $output->writeln("Generando Carátula y Anexo Moura...");
-                $mouraTotals = $this->settlementService->getMouraTotals($month, $year);
-                $coverPath = $this->pdfGenerator->generateMouraCover($mouraTotals, $month, $year);
+                $output->writeln("Generando Reporte Consolidado Moura...");
                 
-                $finalPath = $this->pdfGenerator->generateMouraAnnex($coverPath, $generatedFiles, $month, $year);
-                $output->writeln(" -> ANEXO OK: $finalPath");
+                // Ya tenemos $mouraSummaries en memoria, no hacemos query aquí.
+                $finalPath = $this->pdfGenerator->generateMouraFullReport(
+                    $mouraSummaries, 
+                    $pdvFilesMap, 
+                    $month, 
+                    $year
+                );
+                
+                $output->writeln("<info> -> REPORTE MOURA COMPLETO: $finalPath</info>");
             }
 
             return Command::SUCCESS;
 
         } catch (\Exception $e) {
             $output->writeln("<error>Error Crítico: " . $e->getMessage() . "</error>");
+            $output->writeln($e->getTraceAsString());
             return Command::FAILURE;
         }
     }

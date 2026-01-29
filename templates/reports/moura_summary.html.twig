@@ -5,229 +5,169 @@
     <style>
         @page { margin: 0px; }
         
+        /* Definición Fuente Amasis */
         @font-face {
             font-family: 'Amasis MT Pro Light';
-            /* Usamos la variable que viene de PHP */
             src: url(data:font/truetype;charset=utf-8;base64,{{ font_amasis }}) format('truetype');
-            font-weight: normal;
-            font-style: normal;
+            font-weight: normal; font-style: normal;
         }
 
         body { 
-            /* La aplicamos como prioridad. Si falla, usa serif */
             font-family: 'Amasis MT Pro Light', "Times New Roman", serif; 
             color: #000;
         }
 
-        /* --- CLASES PARA TOTALES --- */
-        .bloque-totales {
-            margin-bottom: 20px;
-            text-align: center;
-        }
-
-        .titulo-concepto {
-            font-weight: bold; /* DomPDF intentará hacer un "Faux Bold" si no tienes el archivo Bold */
-            text-transform: uppercase;
-            font-size: 14px;
-            margin-bottom: 5px; 
-        }
-
-        .valor-importe {
-            font-family: "Liberation Serif", "DejaVu Serif", serif;
-            font-weight: normal;
-            font-size: 11px;
-            margin-top: 0px; 
-        }
-
-        /* --- OTROS ESTILOS --- */
+        /* Clases generales */
+        .bloque-totales { margin-bottom: 20px; text-align: center; }
+        .titulo-concepto { font-weight: bold; text-transform: uppercase; font-size: 14px; margin-bottom: 5px; }
+        .valor-importe { font-weight: normal; font-size: 14px; margin-top: 0px; }
         .header-img { position: fixed; top: 0; left: 0; width: 100%; height: auto; z-index: -1000; }
         .footer-img { position: fixed; bottom: 20px; right: 20px; width: 150px; height: auto; z-index: -1000; }
+        .footer-note { position: fixed; bottom: 30px; left: 40px; right: 40px; text-align: center; font-size: 9px; color: #666; font-style: italic; }
         
         table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
         th, td { padding: 4px; text-align: left; vertical-align: top; }
         
-        .footer-note { 
-            position: fixed; bottom: 30px; left: 40px; right: 40px; 
-            text-align: center; font-size: 9px; color: #666; font-style: italic; 
+        /* Estilos específicos para separador */
+        .separator-container {
+            position: absolute; top: 50%; left: 0; width: 100%; text-align: center; transform: translateY(-50%);
         }
-
-        /* Salto de página para separar Unidades de Negocio */
-        .page-break { 
-            page-break-after: always; 
+        .separator-title {
+            font-size: 24px; font-weight: bold; text-decoration: underline;
         }
-
-        {% if is_preview is defined and is_preview %}
-        body {
-            width: 21cm; min-height: 29.7cm; margin: 20px auto;
-            border: 1px solid #ccc; box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            background: white; padding-top: 1px;
-        }
-        html { background: #f0f0f0; }
-        {% endif %}
     </style>
 </head>
 <body>
-    {# BUCLE PRINCIPAL: Recorremos cada reporte (Unidad de Negocio) #}
-    {% for r in report %}
+    {# HEADER COMÚN #}
+    {% if images.encabezado %}<img src="data:image/png;base64,{{ images.encabezado }}" class="header-img">{% endif %}
+    {% if images.pie %}<img src="data:image/png;base64,{{ images.pie }}" class="footer-img">{% endif %}
 
-        {# Imágenes fijas (fuera del flujo normal para que se repitan si DomPDF lo soporta, 
-           o insertadas en cada vuelta) #}
-        {% if images.encabezado %}
-            <img src="data:image/png;base64,{{ images.encabezado }}" class="header-img">
-        {% endif %}
-        {% if images.pie %}
-            <img src="data:image/png;base64,{{ images.pie }}" class="footer-img">
-        {% endif %}
-        
-        <div style="position: relative;">
-            
-            <h1 style="text-align: center; margin-top: 130px; font-size: 18px; text-decoration: underline;">
-                Resumen total Liquidaciones Cobres Flex
-            </h1>            
-            <div style="margin-left: 40px; margin-right: 40px; text-align: right;">
-                <p style="margin: 2px 0;"><strong>Unidad de Negocio:</strong> {{ r.header.unidad_de_negocio }}</p>
-                <p style="margin: 2px 0;"><strong>Período:</strong> {{ r.header.periodo }}</p>
-            </div>>
-                        
-            <table style="width: 10.5cm; margin: 0 auto; border: none;">
-                <thead>
-                    <tr style="font-weight: bold;">
-                        <td style="width: 55%; padding-bottom: 10px;">DETALLE DE LAS TRANSACCIONES</td>
-                        <td style="width: 10%; padding-bottom: 10px;"></td>
-                        <td style="width: 5%; padding-bottom: 10px;"></td>
-                        <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">MONTO BRUTO</td>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td style="font-weight: bold;">Ventas con tarjetas de Débito</td>
-                        <td>{{ r.items.debito.cant }}</td>
-                        <td></td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;">{{ r.items.debito.monto|number_format(2,',','.') }}</td>
-                    </tr>
-                    
-                    <tr>
-                        <td style="font-weight: bold;">Ventas con tarjetas de Crédito</td>
-                        <td>{{ r.items.credito.cant }}</td>
-                        <td></td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;">{{ r.items.credito.monto|number_format(2,',','.') }}</td>
-                    </tr>
-
-                    {% if r.items.qr.cant > 0 %}
-                    <tr>
-                        <td style="font-weight: bold;">Ventas con QR</td>
-                        <td>{{ r.items.qr.cant }}</td>
-                        <td></td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;">{{ r.items.qr.monto|number_format(2,',','.') }}</td>
-                    </tr>
-                    {% endif %}
-
-                    <tr>
-                        <td style="font-weight: bold;">Devoluciones</td>
-                        <td>0</td>
-                        <td></td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;"> - </td>
-                    </tr>
-
-                    <tr><td colspan="5" style="height: 5px;"></td></tr>
-
-                    <tr style="font-weight: bold;">
-                        <td>TOTAL</td>
-                        {# CORREGIDO: r.totales (español) en lugar de report.totals #}
-                        <td>{{ r.totales.transacciones }}</td>
-                        <td></td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;">{{ r.totales.bruto|number_format(2,',','.') }}</td>
-                    </tr>
-                </tbody>
-            </table>
-
-            <div style="height: 20px;"></div>
-
-            <table style="width: 10.5cm; margin: 0 auto; border: none;">
-                <thead>
-                    <tr style="font-weight: bold;">
-                        <td style="width: 70%; padding-bottom: 10px;">DETALLE DESCUENTOS</td>
-                        <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">IMPORTE</td>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td style="font-weight: bold;">Costo de servicio</td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        {# Este es el que querías en 0, viene como costo_de_servicio #}
-                        <td style="text-align: right; padding-left: 0;">{{ r.totales.costo_de_servicio|number_format(2,',','.') }}</td>
-                    </tr>
-                    <tr>
-                        <td style="font-weight: bold;">Costo financiación</td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;">{{ r.totales.costo_de_financiacion|number_format(2,',','.') }}</td>
-                    </tr>
-                    <tr>
-                        <td style="font-weight: bold;">Aranceles Tarjetas</td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;">{{ r.totales.aranceles_tarjetas|number_format(2,',','.') }}</td>
-                    </tr>
-                    <tr>
-                        <td style="font-weight: bold;">IVA</td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;">{{ r.totales.IVA|number_format(2,',','.') }}</td>
-                    </tr>
-                    <tr>
-                        <td style="font-weight: bold;">Otros Impuestos</td>
-                        <td style="text-align: right; padding-right: 2px;">$</td>
-                        <td style="text-align: right; padding-left: 0;">{{ r.totales.otros_impuestos|number_format(2,',','.') }}</td>
-                    </tr>
-                </tbody>
-            </table>
-
-            <div style="height: 40px;"></div>
-
-            <div class="bloque-totales">
-                <p class="titulo-concepto">NETO PERCIBIDO</p>
-                <p class="valor-importe">$ {{ r.totales.neto_percibido|number_format(2,',','.') }}</p>
-            </div>
-
-            <div class="bloque-totales">
-                <p class="titulo-concepto">EN CUENTA A COMERCIOS</p>
-                <p class="valor-importe">$ {{ r.totales.en_cuenta_comercio|number_format(2,',','.') }}</p>
-            </div>
-
-            <div class="bloque-totales">
-                <p class="titulo-concepto">EN CC BATERIAS MOURA</p>
-                <p class="valor-importe">$ {{ r.totales.en_cc_moura|number_format(2,',','.') }}</p>
-            </div>
-
-            <div class="bloque-totales">
-                <p class="titulo-concepto">COSTO DE SERVICIO</p>
-                <p class="valor-importe">$ {{ r.totales.costo_servicio_bloque|number_format(2,',','.') }}</p>
-            </div>
-
-            <div class="bloque-totales">
-                <p class="titulo-concepto">TRANSFERENCIA MOURA</p>
-                <p class="valor-importe">$ {{ r.totales.transferencia_moura|number_format(2,',','.') }}</p>
-            </div>
-
-            <div class="bloque-totales">
-                <p class="titulo-concepto">BENEFICIO CREDMOURA</p>
-                <p class="valor-importe">$ {{ r.totales.beneficio_credmoura|number_format(2,',','.') }}</p>
-            </div>
-
-            <div style="height: 30px;"></div>
-
-            <div class="footer-note">DOCUMENTO NO VALIDO PARA EL COMPUTO DE EGRESOS Y/O IMPUESTOS DETALLADOS PRECEDENTEMENTE</div>
-            
+    {# MODO SEPARADOR (Hoja 2 y 4) #}
+    {% if type == 'separator' %}
+        <div class="separator-container">
+            <h1 class="separator-title">{{ title_separator }}</h1>
         </div>
 
-        {# Salto de página si NO es el último elemento #}
-        {% if not loop.last %}
-            <div class="page-break"></div>
-        {% endif %}
+    {# MODO RESUMEN (Hoja 1 y 3) #}
+    {% else %}
+        <h1 style="text-align: center; margin-top: 160px; font-size: 18px; text-decoration: underline;">
+            Resumen total Liquidaciones Cobres Flex
+        </h1>
+        
+        <div style="margin-left: 40px; margin-right: 40px; text-align: right;">
+            {% if report.header.unidad_de_negocio %}
+                <p style="margin: 2px 0;"><strong>Unidad de Negocio:</strong> {{ report.header.unidad_de_negocio }}</p>
+            {% endif %}
+            <p style="margin: 2px 0;"><strong>Período:</strong> {{ report.header.periodo }}</p>
+        </div>
+        
+        <div style="height: 20px;"></div>
 
-    {% endfor %}
+        <table style="width: 10.5cm; margin: 0 auto; border: none;">
+            <thead>
+                <tr style="font-weight: bold;">
+                    <td style="width: 55%; padding-bottom: 10px;">DETALLE DE LAS TRANSACCIONES</td>
+                    <td style="width: 10%; padding-bottom: 10px;"></td>
+                    <td style="width: 5%; padding-bottom: 10px;"></td>
+                    <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">MONTO BRUTO</td>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td style="font-weight: bold;">Ventas con tarjetas de Débito</td>
+                    <td>{{ report.items.debito.cant }}</td>
+                    <td></td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;">{{ report.items.debito.monto|number_format(2,',','.') }}</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: bold;">Ventas con tarjetas de Crédito</td>
+                    <td>{{ report.items.credito.cant }}</td>
+                    <td></td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;">{{ report.items.credito.monto|number_format(2,',','.') }}</td>
+                </tr>
+
+                <tr>
+                    <td style="font-weight: bold;">Ventas con QR</td>
+                    <td>{{ report.items.qr.cant }}</td>
+                    <td></td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;">{{ report.items.qr.monto|number_format(2,',','.') }}</td>
+                </tr>
+
+                <tr>
+                    <td style="font-weight: bold;">Ventas con Prepago</td>
+                    <td>{{ report.items.prepago.cant }}</td>
+                    <td></td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;">{{ report.items.prepago.monto|number_format(2,',','.') }}</td>
+                </tr>
+ 
+                <tr>
+                    <td style="font-weight: bold;">Devoluciones</td>
+                    <td>0</td>
+                    <td></td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;"> - </td>
+                </tr>
+                <tr><td colspan="5" style="height: 5px;"></td></tr>
+                <tr style="font-weight: bold;">
+                    <td>TOTAL</td>
+                    <td>{{ report.totales.transacciones }}</td>
+                    <td></td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;">{{ report.totales.bruto|number_format(2,',','.') }}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div style="height: 20px;"></div>
+
+        <table style="width: 10.5cm; margin: 0 auto; border: none;">
+            <thead>
+                <tr style="font-weight: bold;">
+                    <td style="width: 70%; padding-bottom: 10px;">DETALLE DESCUENTOS</td>
+                    <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">IMPORTE</td>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td style="font-weight: bold;">Costo de servicio</td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;">{{ report.totales.costo_servicio|number_format(2,',','.') }}</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: bold;">IVA</td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;">{{ report.totales.iva|number_format(2,',','.') }}</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: bold;">Servicio Beneficio CredMoura</td>
+                    <td style="text-align: right; padding-right: 2px;">$</td>
+                    <td style="text-align: right; padding-left: 0;">{{ report.totales.beneficio_credmoura|number_format(2,',','.') }}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div style="height: 40px;"></div>
+
+        <div class="bloque-totales">
+            <p class="titulo-concepto">NETO PERCIBIDO</p>
+            <p class="valor-importe">$ {{ report.totales.neto_percibido|number_format(2,',','.') }}</p>
+        </div>
+
+        <div class="bloque-totales">
+            <p class="titulo-concepto">EN CUENTA COMERCIO</p>
+            <p class="valor-importe">$ {{ report.totales.en_cuenta_comercio|number_format(2,',','.') }}</p>
+        </div>
+
+        <div class="bloque-totales">
+            <p class="titulo-concepto">EN CC BATERIAS MOURA</p>
+            <p class="valor-importe">$ {{ report.totales.en_cc_moura|number_format(2,',','.') }}</p>
+        </div>
+        
+        <div class="footer-note">DOCUMENTO NO VALIDO PARA EL COMPUTO DE EGRESOS Y/O IMPUESTOS DETALLADOS PRECEDENTEMENTE</div>
+    {% endif %}
 </body>
 </html>
