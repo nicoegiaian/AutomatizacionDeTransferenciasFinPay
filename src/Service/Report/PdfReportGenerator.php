@@ -8,11 +8,13 @@ use setasign\Fpdi\Fpdi;
 use Twig\Environment;
 use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Psr\Log\LoggerInterface;
 
 class PdfReportGenerator
 {
     private Environment $twig;
     private Filesystem $filesystem;
+    private LoggerInterface $logger;
     private string $projectDir;
     private string $outputDir;
 
@@ -28,29 +30,33 @@ class PdfReportGenerator
     public function __construct(
         Environment $twig,
         #[Autowire('%kernel.project_dir%')] string $projectDir,
-        #[Autowire('%env(resolve:PATH_RESUMENES_PDF)%')] string $outputDir
+        #[Autowire('%env(resolve:PATH_RESUMENES_PDF)%')] string $outputDir,
+        LoggerInterface $logger
     ) {
         $this->twig = $twig;
         $this->filesystem = new Filesystem();
         $this->projectDir = $projectDir;
         $this->outputDir = $outputDir;
+        $this->logger = $logger;
     }
 
-    private function getBase64Image(string $relativePath): string
-    {
-        $path = $this->projectDir . '/public/' . $relativePath;
-        if (!file_exists($path)) return '';
-        return base64_encode(file_get_contents($path));
-    }
-    
-    private function getBase64Font(): string {
-        $path = $this->projectDir . '/public/fonts/AmasisMTPro-Light.ttf';
-        if (!file_exists($path)) return '';
-        return base64_encode(file_get_contents($path));
+    // --- RECURSOS ---
+    private function getResources(): array {
+        $imgDir = $this->projectDir . '/public';
+        return [
+            'images' => [
+                'encabezado' => $this->getBase64($imgDir . '/img/encabezado.png'),
+                'pie' => $this->getBase64($imgDir . '/img/pie.png')
+            ],
+            'font' => $this->getBase64($imgDir . '/public/fonts/AmasisMTPro-Light.ttf')
+        ];
     }
 
-    private function renderPdf(string $html): string
-    {
+    private function getBase64(string $path): string {
+        return file_exists($path) ? base64_encode(file_get_contents($path)) : '';
+    }
+
+    private function renderPdf(string $html): string {
         $dompdf = new Dompdf();
         $options = $dompdf->getOptions();
         $options->setIsRemoteEnabled(true); 
@@ -61,8 +67,7 @@ class PdfReportGenerator
         return $dompdf->output();
     }
 
-    private function getTargetDir(int $month, int $year): string
-    {
+    private function getTargetDir(int $month, int $year): string {
         $folderName = self::MESES_CARPETA[$month];
         $dir = sprintf('%s/%d/%s', $this->outputDir, $year, $folderName);
         if (!$this->filesystem->exists($dir)) {
@@ -71,132 +76,147 @@ class PdfReportGenerator
         return $dir;
     }
 
-    // --- CORRECCIÓN AQUÍ: Renombrado a generateMouraFullReport ---
-    public function generateMouraFullReport(array $summaryData, array $pdvFilesMap, int $month, int $year): string
-    {
-        // 1. Preparar recursos comunes (imágenes y fuentes)
-        $images = [
-            'encabezado' => $this->getBase64Image('img/encabezado.png'),
-            'pie' => $this->getBase64Image('img/pie.png')
-        ];
-        $fontAmasis = $this->getBase64Font();
-        $targetDir = $this->getTargetDir($month, $year);
+    private function getFormattedDateString(int $month, int $year): string {
+        $mes = self::MESES_CORTO[$month];
+        $anio = substr((string)$year, 2);
+        return sprintf("%s %s", $mes, $anio);
+    }
 
-        // Inicializamos FPDI para unir todo
+    // --- MAESTRO GLOBAL (Carátula Global + Separadores + Unidades) ---
+    public function generateGlobalMaster(array $globalData, array $filesToMerge, int $month, int $year): string
+    {
+        $res = $this->getResources();
+        $targetDir = $this->getTargetDir($month, $year);
+        $dateStr = $this->getFormattedDateString($month, $year);
+
+        $filename = sprintf("MOURA %s.pdf", $dateStr);
+        $outputPath = $targetDir . '/' . $filename;
+
         $pdf = new Fpdi();
 
-        // --- PASO 1: Carátula Global (Hoja 1) ---
+        // 1. Carátula Global (Hoja 1)
         $htmlGlobal = $this->twig->render('reports/moura_summary.html.twig', [
-            'report' => $summaryData['global'],
+            'report' => $globalData,
             'type' => 'summary', 
-            'images' => $images,
-            'font_amasis' => $fontAmasis
+            'images' => $res['images'],
+            'font_amasis' => $res['font']
         ]);
         $this->appendHtmlToPdf($pdf, $htmlGlobal);
 
-        // --- PASO 2: Separador "Apertura" (Hoja 2) ---
-        $htmlSep1 = $this->twig->render('reports/moura_summary.html.twig', [
-            'title_separator' => 'Apertura por Unidad de Negocio',
-            'type' => 'separator', 
-            'images' => $images,
-            'font_amasis' => $fontAmasis
+        // --- PREPARAR SEPARADOR ---
+        // Generamos el HTML del separador una sola vez para reutilizarlo
+        $htmlSeparator = $this->twig->render('reports/moura_summary.html.twig', [
+            'title_separator' => 'Detalle por Unidad de Negocio',
+            'type' => 'separator',
+            'images' => $res['images'], // Respeta encabezado y pie
+            'font_amasis' => $res['font']
         ]);
-        $this->appendHtmlToPdf($pdf, $htmlSep1);
 
-        // --- PASO 3: Iterar Unidades ---
-        foreach ($summaryData['units'] as $unidadNombre => $unitData) {
-            
-            // a) Carátula de Unidad
-            $htmlUnit = $this->twig->render('reports/moura_summary.html.twig', [
-                'report' => $unitData,
-                'type' => 'summary',
-                'images' => $images,
-                'font_amasis' => $fontAmasis
-            ]);
-            $this->appendHtmlToPdf($pdf, $htmlUnit);
+        // 2. Anexar Unidades con sus Separadores
+        foreach ($filesToMerge as $file) {
+            if (file_exists($file)) {
+                // A. Insertar Carátula "Detalle por Unidad de Negocio"
+                $this->appendHtmlToPdf($pdf, $htmlSeparator);
 
-            // b) Separador "ANEXO"
-            $htmlSepAnexo = $this->twig->render('reports/moura_summary.html.twig', [
-                'title_separator' => 'ANEXO: Detalle por punto de venta',
-                'type' => 'separator',
-                'images' => $images,
-                'font_amasis' => $fontAmasis
-            ]);
-            $this->appendHtmlToPdf($pdf, $htmlSepAnexo);
-
-            // c) Adjuntar PDFs de los Puntos de Venta
-            if (isset($pdvFilesMap[$unidadNombre])) {
-                foreach ($pdvFilesMap[$unidadNombre] as $pdvFile) {
-                    if (file_exists($pdvFile)) {
-                        $this->appendExistingPdfToPdf($pdf, $pdvFile);
-                    }
-                }
+                // B. Pegar el PDF completo de la Unidad (que ya trae su resumen y sus PDVs)
+                $this->appendExistingPdfToPdf($pdf, $file);
+            } else {
+                $this->logger->warning("Archivo de Unidad para fusionar no encontrado: $file");
             }
         }
 
-        // Guardar archivo final
-        $outputPath = $targetDir . '/MOURA_REPORTE_MENSUAL.pdf';
         $pdf->Output('F', $outputPath);
-
         return $outputPath;
     }
 
+    // --- MAESTRO POR UNIDAD (Carátula + Separador + Hijos) ---
+    public function generateUnitMaster(string $unitName, array $unitData, array $pdvFiles, int $month, int $year): string
+    {
+        $res = $this->getResources();
+        $targetDir = $this->getTargetDir($month, $year);
+        $dateStr = $this->getFormattedDateString($month, $year);
+
+        $filename = sprintf("MOURA %s %s.pdf", $unitName, $dateStr);
+        $outputPath = $targetDir . '/' . $filename;
+
+        $pdf = new Fpdi();
+
+        // 1. Carátula Unidad
+        $htmlUnit = $this->twig->render('reports/moura_summary.html.twig', [
+            'report' => $unitData,
+            'type' => 'summary',
+            'images' => $res['images'],
+            'font_amasis' => $res['font']
+        ]);
+        $this->appendHtmlToPdf($pdf, $htmlUnit);
+
+        // 2. Separador
+        $htmlSep = $this->twig->render('reports/moura_summary.html.twig', [
+            'title_separator' => 'ANEXO: Detalle por punto de venta',
+            'type' => 'separator',
+            'images' => $res['images'],
+            'font_amasis' => $res['font']
+        ]);
+        $this->appendHtmlToPdf($pdf, $htmlSep);
+
+        // 3. Adjuntar hijos
+        foreach ($pdvFiles as $file) {
+            if (file_exists($file)) {
+                $this->appendExistingPdfToPdf($pdf, $file);
+            } else {
+                $this->logger->warning("Archivo hijo no encontrado: $file");
+            }
+        }
+
+        $pdf->Output('F', $outputPath);
+        return $outputPath;
+    }
+
+    // --- HELPERS (FPDI con Logs) ---
     private function appendHtmlToPdf(Fpdi $pdf, string $html): void {
         $content = $this->renderPdf($html);
         $tmpFile = tempnam(sys_get_temp_dir(), 'dompdf_frag');
         file_put_contents($tmpFile, $content);
-
         try {
-            $pageCount = $pdf->setSourceFile($tmpFile);
-            for ($i = 1; $i <= $pageCount; $i++) {
-                $tplId = $pdf->importPage($i);
+            $count = $pdf->setSourceFile($tmpFile);
+            for ($i = 1; $i <= $count; $i++) {
+                $id = $pdf->importPage($i);
                 $pdf->AddPage();
-                $pdf->useTemplate($tplId);
+                $pdf->useTemplate($id);
             }
-        } catch (\Exception $e) { }
+        } catch (\Exception $e) {
+            $this->logger->error("Error adjuntando HTML: " . $e->getMessage());
+        }
         @unlink($tmpFile);
     }
 
     private function appendExistingPdfToPdf(Fpdi $pdf, string $path): void {
         try {
-            $pageCount = $pdf->setSourceFile($path);
-            for ($i = 1; $i <= $pageCount; $i++) {
-                $tplId = $pdf->importPage($i);
+            $count = $pdf->setSourceFile($path);
+            for ($i = 1; $i <= $count; $i++) {
+                $id = $pdf->importPage($i);
                 $pdf->AddPage();
-                $pdf->useTemplate($tplId);
+                $pdf->useTemplate($id);
             }
-        } catch (\Exception $e) { }
+        } catch (\Exception $e) {
+            $this->logger->error("Error adjuntando PDF ($path): " . $e->getMessage());
+        }
     }
 
-     public function generatePdvReport(array $data, int $month, int $year): string
-    {
-        $images = [
-            'encabezado' => $this->getBase64Image('img/encabezado.png'),
-            'pie' => $this->getBase64Image('img/pie.png')
-        ];
-
-        $fontPath = $this->projectDir . '/public/fonts/Amasis MT Std Light.ttf';
-        $fontBase64 = '';
-        
-        if (file_exists($fontPath)) {
-            $fontBase64 = base64_encode(file_get_contents($fontPath));
-        }
-
+    public function generatePdvReport(array $data, int $month, int $year): string {
+        $res = $this->getResources();
         $html = $this->twig->render('reports/pdv_settlement.html.twig', [
-            'report' => $data,
-            'images' => $images,
-            'font_amasis' => $fontBase64 
+            'report' => $data, 'images' => $res['images'], 'font_amasis' => $res['font']
         ]);
-
         $pdfContent = $this->renderPdf($html);
         
-        $mesCorto = self::MESES_CORTO[$month];
-        $anioCorto = substr((string)$year, 2);
-        $razonLimpia = str_replace(['/', '\\'], '-', $data['header']['razon_social']);
+        $mes = self::MESES_CORTO[$month];
+        $anio = substr((string)$year, 2);
+        $razon = str_replace(['/', '\\'], '-', $data['header']['razon_social']);
         
-        $filename = sprintf('%s %s %s.pdf', $razonLimpia, $mesCorto, $anioCorto);
+        $filename = sprintf('%s %s %s.pdf', $razon, $mes, $anio);
         $fullPath = $this->getTargetDir($month, $year) . '/' . $filename;
-
+        
         file_put_contents($fullPath, $pdfContent);
         return $fullPath;
     }

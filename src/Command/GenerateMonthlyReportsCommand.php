@@ -4,25 +4,36 @@ namespace App\Command;
 
 use App\Service\Report\MonthlySettlementService;
 use App\Service\Report\PdfReportGenerator;
+use App\Service\Notifier; // Tu servicio custom
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 #[AsCommand(
     name: 'app:generate-monthly-reports',
-    description: 'Genera reportes PDF mensuales y el anexo consolidado de Moura.',
+    description: 'Genera reportes PDF mensuales y los maestros por Unidad de Negocio y Global.',
 )]
 class GenerateMonthlyReportsCommand extends Command
 {
     private MonthlySettlementService $settlementService;
     private PdfReportGenerator $pdfGenerator;
+    private Notifier $notifier;
+    private string $logFilePath;
 
-    public function __construct(MonthlySettlementService $settlementService, PdfReportGenerator $pdfGenerator)
+    public function __construct(
+        MonthlySettlementService $settlementService, 
+        PdfReportGenerator $pdfGenerator,
+        Notifier $notifier, 
+        #[Autowire('%kernel.project_dir%')] string $projectDir
+    )
     {
         $this->settlementService = $settlementService;
         $this->pdfGenerator = $pdfGenerator;
+        $this->notifier = $notifier;
+        $this->logFilePath = $projectDir . '/var/log/reporte_mensual_moura.log';
         parent::__construct();
     }
 
@@ -31,100 +42,150 @@ class GenerateMonthlyReportsCommand extends Command
         $this
             ->addOption('month', null, InputOption::VALUE_OPTIONAL, 'Mes (1-12)')
             ->addOption('year', null, InputOption::VALUE_OPTIONAL, 'Año (ej: 2025)')
-            ->addOption('test-one', null, InputOption::VALUE_NONE, 'Si se activa, solo genera 1 reporte para probar');
+            ->addOption('test-one', null, InputOption::VALUE_NONE, 'Si se activa, solo genera 1 reporte individual para probar');
+            // Eliminada la opción email-report, se usa .env via Notifier
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        // 1. Resolver Fecha (Default: Mes anterior)
+        // 1. INICIALIZAR LOG
+        file_put_contents($this->logFilePath, "=== INICIO DE PROCESO ===\n");
+        
+        $log = function($msg, $type = 'INFO') use ($output) {
+            $timestamp = date('Y-m-d H:i:s');
+            $line = "[$timestamp] [$type] $msg";
+            file_put_contents($this->logFilePath, $line . PHP_EOL, FILE_APPEND);
+            
+            if ($type === 'ERROR' || $type === 'CRITICAL') {
+                $output->writeln("<error>$line</error>");
+            } else {
+                $output->writeln($line);
+            }
+        };
+
         $now = new \DateTime();
         $month = $input->getOption('month') ? (int)$input->getOption('month') : (int)$now->modify('-1 month')->format('n');
-        
-        if ($input->getOption('year')) {
-            $year = (int)$input->getOption('year');
-        } else {
-            $year = (int)$now->format('Y'); 
-        }
+        $year = $input->getOption('year') ? (int)$input->getOption('year') : (int)$now->format('Y');
 
-        $output->writeln("=== Iniciando Generación: $month / $year ===");
+        $log("Iniciando generación para $month/$year");
 
         try {
-            // ---------------------------------------------------------
-            // PASO CLAVE: TRAEMOS TODOS LOS DATOS DE LA BD AL PRINCIPIO
-            // ---------------------------------------------------------
-            
-            // A. Datos Individuales
-            $output->writeln("Consultando datos individuales...");
+            // --- PASO 1: TRAER DATOS ---
+            $log("Consultando datos de Puntos de Venta...");
             $data = $this->settlementService->getMonthlyData($month, $year);
             $count = count($data);
-            $output->writeln("Comercios con movimientos: $count");
+            $log("Comercios encontrados: $count");
 
             if ($count === 0) {
-                $output->writeln("No hay datos para procesar.");
+                $log("No hay datos para procesar. Fin del proceso.", 'WARNING');
                 return Command::SUCCESS;
             }
 
-            // B. Datos Agrupados (Moura) - LO HACEMOS AHORA PARA EVITAR EL TIMEOUT DE MYSQL
-            // Si lo dejamos para el final, la conexión puede morir mientras generamos los PDFs.
-            $output->writeln("Consultando resúmenes de Moura...");
+            $log("Consultando resúmenes de Moura (Global y Unidades)...");
             $mouraSummaries = $this->settlementService->getMouraSummaries($month, $year);
 
-            // ---------------------------------------------------------
-            // FIN DE INTERACCIÓN CON BD - AHORA SOLO PROCESAMIENTO PHP
-            // ---------------------------------------------------------
-
-            // 3. Generar Individuales y Agrupar por Unidad
-            $generatedFiles = [];       
-            $pdvFilesMap = [];          
-            
+            // --- PASO 2: GENERAR INDIVIDUALES ---
+            $pdvFilesMap = [];    
             $limit = $input->getOption('test-one') ? 1 : 999999;
             $i = 0;
 
             foreach ($data as $pdvData) {
                 if ($i >= $limit) {
-                    $output->writeln("<comment>Modo Test: Deteniendo tras generar 1 reporte.</comment>");
+                    $log("Modo Test: Deteniendo generación individual.", 'WARNING');
                     break;
                 }
-
                 $razon = $pdvData['header']['razon_social'];
-                
-                // Generamos el PDF individual (Esto tarda, pero ya no importa si se cae la BD)
-                $path = $this->pdfGenerator->generatePdvReport($pdvData, $month, $year);
-                
-                $generatedFiles[] = $path;
-
-                // Agrupación
-                $unidad = $pdvData['header']['unidad_de_negocio'] ?? 'Sin Unidad';
-                
-                if (!isset($pdvFilesMap[$unidad])) {
-                    $pdvFilesMap[$unidad] = [];
+                try {
+                    $path = $this->pdfGenerator->generatePdvReport($pdvData, $month, $year);
+                    $unidad = $pdvData['header']['unidad_de_negocio'] ?? 'Sin Unidad';
+                    
+                    if (!isset($pdvFilesMap[$unidad])) $pdvFilesMap[$unidad] = [];
+                    $pdvFilesMap[$unidad][] = $path;
+                    
+                    $log(" -> OK PDF Individual [$unidad]: $razon");
+                } catch (\Exception $ePdv) {
+                    $log("Fallo generando PDF de $razon: " . $ePdv->getMessage(), 'ERROR');
                 }
-                $pdvFilesMap[$unidad][] = $path;
-                
-                $output->writeln(" -> OK [$unidad]: $razon");
                 $i++;
             }
 
-            // 4. Generar Reporte Full Moura (Usando los datos que trajimos al principio)
+            // --- PASO 3: GENERAR MAESTROS ---
+            $archivosFinales = []; 
+            $unitMasterFiles = []; // Guardamos los paths de las Unidades para pegarlos al Global
+
             if ($i > 0) {
-                $output->writeln("Generando Reporte Consolidado Moura...");
+                $log("=== Generando Archivos Maestros ===");
                 
-                // Ya tenemos $mouraSummaries en memoria, no hacemos query aquí.
-                $finalPath = $this->pdfGenerator->generateMouraFullReport(
-                    $mouraSummaries, 
-                    $pdvFilesMap, 
-                    $month, 
-                    $year
-                );
-                
-                $output->writeln("<info> -> REPORTE MOURA COMPLETO: $finalPath</info>");
+                // A. PRIMERO LAS UNIDADES (Porque el Global las necesita)
+                foreach ($mouraSummaries['units'] as $unitName => $unitData) {
+                    $filesForUnit = $pdvFilesMap[$unitName] ?? [];
+                    if (empty($filesForUnit)) continue;
+
+                    try {
+                        $unitPath = $this->pdfGenerator->generateUnitMaster($unitName, $unitData, $filesForUnit, $month, $year);
+                        $log(" -> UNIDAD GENERADA [$unitName]: " . basename($unitPath));
+                        
+                        $archivosFinales[] = "UNIDAD [$unitName]: " . basename($unitPath);
+                        $unitMasterFiles[] = $unitPath; // Guardar para el Global
+                    } catch (\Exception $eUnit) {
+                        $log("Fallo generando Unidad $unitName: " . $eUnit->getMessage(), 'ERROR');
+                    }
+                }
+
+                // B. REPORTE GLOBAL (Carátula Global + Todos los reportes de Unidades)
+                try {
+                    // Ahora pasamos $unitMasterFiles como adjuntos
+                    $globalPath = $this->pdfGenerator->generateGlobalMaster(
+                        $mouraSummaries['global'], 
+                        $unitMasterFiles, // <--- CAMBIO CLAVE
+                        $month, 
+                        $year
+                    );
+                    $log(" -> GLOBAL GENERADO: " . basename($globalPath));
+                    
+                    // Lo ponemos primero en la lista del mail
+                    array_unshift($archivosFinales, "GLOBAL COMPLETO: " . basename($globalPath));
+                } catch (\Exception $eGlobal) {
+                    $log("Fallo generando Global: " . $eGlobal->getMessage(), 'ERROR');
+                }
             }
+
+            $log("=== PROCESO FINALIZADO OK ===");
+
+            // --- EMAIL DE ÉXITO ---
+            // Usamos tu Notifier que lee MAIL_DESTINATION del .env
+            $listaHTML = "<ul><li>" . implode("</li><li>", $archivosFinales) . "</li></ul>";
+            $htmlBody = "<h3>Reportes Moura $month/$year: Generación Exitosa</h3>
+                            <p>El proceso finalizó correctamente. Se han generado los siguientes archivos:</p>
+                            $listaHTML
+                            <p><small>Log de ejecución disponible en el servidor.</small></p>";
+            
+            // Sin parámetro de destino, usa el interno
+            $this->notifier->sendHtmlEmail(
+                "Reportes Moura $month/$year: Generación Exitosa", 
+                $htmlBody
+            );
+            
+            $log("Notificación de éxito enviada (Destino: " . $this->notifier->getDestination() . ")");
 
             return Command::SUCCESS;
 
         } catch (\Exception $e) {
-            $output->writeln("<error>Error Crítico: " . $e->getMessage() . "</error>");
-            $output->writeln($e->getTraceAsString());
+            // --- MANEJO DE ERROR CRÍTICO ---
+            $msg = "Error Crítico Generando Reportes: " . $e->getMessage();
+            $log($msg, 'CRITICAL');
+            $log($e->getTraceAsString(), 'CRITICAL');
+
+            // --- EMAIL DE FALLO ---
+            // Sin parámetro de destino, usa el interno
+            $this->notifier->sendFailureEmail(
+                "ALERTA: Falla Automatización Moura", 
+                "El proceso falló. Se adjunta log de ejecución.\n\nError: " . $e->getMessage(),
+                $this->logFilePath
+            );
+            
+            $output->writeln("Alerta de fallo enviada.");
+
             return Command::FAILURE;
         }
     }
