@@ -4,14 +4,21 @@
     <meta charset="UTF-8">
     <style>
         @page { margin: 0px; }
-        body {
-            font-family: Arial, sans-serif; font-size: 11px;
-            margin-top: 180px; margin-left: 40px; margin-right: 40px; margin-bottom: 80px;
+        /* Definición Fuente Amasis */
+        @font-face {
+            font-family: 'Amasis MT Pro Light';
+            src: url(data:font/truetype;charset=utf-8;base64,{{ font_amasis }}) format('truetype');
+            font-weight: normal; font-style: normal;
+        }
+
+        body { 
+            font-family: 'Amasis MT Pro Light', "Times New Roman", serif; 
+            color: #000;
         }
         .header-img { position: fixed; top: 0; left: 0; width: 100%; height: auto; z-index: -1000; }
         .footer-img { position: fixed; bottom: 20px; right: 20px; width: 150px; height: auto; z-index: -1000; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
-        th, td { padding: 4px; text-align: left; vertical-align: top; }
+        th, td { padding: 2px; text-align: left; vertical-align: top; }
         .amount { text-align: right; white-space: nowrap; }
         .section-header { font-weight: bold; margin-top: 15px; border-bottom: 1px solid #000; text-transform: uppercase; }
         .total-row td { border-top: 1px solid #000; font-weight: bold; padding-top: 5px;}
@@ -39,7 +46,7 @@
         <img src="data:image/png;base64,{{ images.pie }}" class="footer-img">
     {% endif %}
 
-    <table style="width: 80%; margin: 0 auto; margin-bottom: 15px;">
+    <table style="width: 80%; margin: 160px auto 15px auto;">
         <tr>
             <td style="width:50%; text-align: right; font-weight:bold; padding-right: 10px;">Razón Social</td>
             <td style="width:50%; text-align: left; padding-left: 10px;">{{ report.header.razon_social }}</td>
@@ -58,15 +65,15 @@
         </tr>
     </table>
 
-   <div style="height: 15px;"></div>
+   <div style="height: 20px;"></div>
 
-    <table style="width: 10.5cm; margin: 0 auto; border: none;">
+    <table style="width: 15cm; margin: 0 auto; border: none;">
         <thead>
             <tr style="font-weight: bold;">
                 <td style="width: 55%; padding-bottom: 10px;">DETALLE DE LAS TRANSACCIONES</td>
-                <td style="width: 10%; text-align: left; padding-bottom: 10px;"></td>
+                <td style="width: 10%; text-align: left; padding-bottom: 5px;"></td>
                 <td style="width: 5%; padding-bottom: 10px;"></td>
-                <td colspan="2" style="width: 30%; text-align: center; padding-bottom: 10px;">MONTO BRUTO</td>
+                <td colspan="2" style="width: 30%; text-align: right; padding-right: 10px; padding-bottom: 10px;">MONTO BRUTO</td>
             </tr>
         </thead>
         <tbody>
@@ -107,7 +114,7 @@
                 <td style="text-align: left;">0</td>
                 <td></td>
                 <td style="text-align: right; padding-right: 2px;">$</td>
-                <td style="text-align: right; padding-left: 0;"> - </td>
+                <td style="text-align: right; padding-left: 0;"> 0,00 </td>
             </tr>
 
             <tr><td colspan="5" style="height: 5px;"></td></tr>
@@ -165,7 +172,7 @@
         </tbody>
     </table>
 
-    <div style="height: 40px;"></div>
+    <div style="height: 20px;"></div>
 
     <div style="margin-bottom: 20px; text-align: center;">
     
@@ -209,7 +216,7 @@
     </p>
 
 
-    <div style="height: 30px;"></div>
+    <div style="height: 20px;"></div>
 
     <div class="footer-note">DOCUMENTO NO VALIDO PARA EL COMPUTO DE EGRESOS Y/O IMPUESTOS DETALLADOS PRECEDENTEMENTE</div>
 </body>

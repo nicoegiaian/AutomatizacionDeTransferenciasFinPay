@@ -52,9 +52,16 @@ class TestReportController extends AbstractController
             'pie'        => $imageLoader('/img/pie.png')
         ];
 
+        $fontPath = $publicDir . '/fonts/AmasisMTPro-Light.ttf';
+        $fontBase64 = '';
+        if (file_exists($fontPath)) {
+            $fontBase64 = base64_encode(file_get_contents($fontPath));
+        }
+
         return $this->render('reports/pdv_settlement.html.twig', [
             'report' => $mockReport,
             'images' => $mockImages,
+            'font_amasis' => $fontBase64,
             'is_preview' => true 
         ]);
     }
@@ -91,6 +98,24 @@ class TestReportController extends AbstractController
                 'en_cc_moura' => 4347030.32,
                 'transferencia_moura' => 4200000.00, 
             ]
+        ];
+                
+        $publicDir = $this->getParameter('kernel.project_dir') . '/public';
+
+        $fontPath = $publicDir . '/fonts/AmasisMTPro-Light.ttf';
+        $fontBase64 = '';
+        if (file_exists($fontPath)) {
+            $fontBase64 = base64_encode(file_get_contents($fontPath));
+        }
+         
+        $imageLoader = function($path) use ($publicDir) {
+            $fullPath = $publicDir . $path;
+            return file_exists($fullPath) ? base64_encode(file_get_contents($fullPath)) : '';
+        };
+
+        $mockImages = [
+            'encabezado' => $imageLoader('/img/encabezado.png'), 
+            'pie'        => $imageLoader('/img/pie.png')
         ];
 
         return $this->render('reports/moura_summary.html.twig', [
