@@ -68,6 +68,9 @@ class GenerateMonthlyReportsCommand extends Command
 
         $log("Iniciando generación para $month/$year");
 
+        // --- CORRECCIÓN: Inicializamos la lista ANTES de empezar ---
+        $archivosFinales = []; 
+
         try {
             // --- PASO 1: TRAER DATOS ---
             $log("Consultando datos de Puntos de Venta...");
@@ -101,15 +104,17 @@ class GenerateMonthlyReportsCommand extends Command
                     if (!isset($pdvFilesMap[$unidad])) $pdvFilesMap[$unidad] = [];
                     $pdvFilesMap[$unidad][] = $path;
                     
+                    // --- CORRECCIÓN: Agregamos el archivo a la lista ---
+                    $archivosFinales[] = "PDV [$unidad]: " . basename($path);
+                    
                     $log(" -> OK PDF Individual [$unidad]: $razon");
-                } catch (\Throwable $ePdv) { // <--- CAMBIO: Throwable
+                } catch (\Throwable $ePdv) {
                     $log("Fallo generando PDF de $razon: " . $ePdv->getMessage(), 'ERROR');
                 }
                 $i++;
             }
 
             // --- PASO 3: GENERAR MAESTROS ---
-            $archivosFinales = []; 
             $unitMasterFiles = [];
 
             if ($i > 0) {
@@ -123,9 +128,10 @@ class GenerateMonthlyReportsCommand extends Command
                         $unitPath = $this->pdfGenerator->generateUnitMaster($unitName, $unitData, $filesForUnit, $month, $year);
                         $log(" -> UNIDAD GENERADA [$unitName]: " . basename($unitPath));
                         
-                        $archivosFinales[] = "UNIDAD [$unitName]: " . basename($unitPath);
+                        // Agregamos con negrita para destacar
+                        $archivosFinales[] = "<strong>UNIDAD [$unitName]: " . basename($unitPath) . "</strong>";
                         $unitMasterFiles[] = $unitPath;
-                    } catch (\Throwable $eUnit) { // <--- CAMBIO: Throwable
+                    } catch (\Throwable $eUnit) { 
                         $log("Fallo generando Unidad $unitName: " . $eUnit->getMessage(), 'ERROR');
                     }
                 }
@@ -134,8 +140,9 @@ class GenerateMonthlyReportsCommand extends Command
                     $globalPath = $this->pdfGenerator->generateGlobalMaster($mouraSummaries['global'], $unitMasterFiles, $month, $year);
                     $log(" -> GLOBAL GENERADO: " . basename($globalPath));
                     
-                    array_unshift($archivosFinales, "GLOBAL COMPLETO: " . basename($globalPath));
-                } catch (\Throwable $eGlobal) { // <--- CAMBIO: Throwable
+                    // Ponemos el Global primero
+                    array_unshift($archivosFinales, "<strong>GLOBAL COMPLETO: " . basename($globalPath) . "</strong>");
+                } catch (\Throwable $eGlobal) { 
                     $log("Fallo generando Global: " . $eGlobal->getMessage(), 'ERROR');
                 }
             }
@@ -145,7 +152,7 @@ class GenerateMonthlyReportsCommand extends Command
             // --- EMAIL DE ÉXITO ---
             $listaHTML = "<ul><li>" . implode("</li><li>", $archivosFinales) . "</li></ul>";
             $htmlBody = "<h3>Reportes Moura $month/$year: Generación Exitosa</h3>
-                            <p>El proceso finalizó correctamente. Se han generado los siguientes archivos:</p>
+                            <p>El proceso finalizó correctamente. Se han generado " . count($archivosFinales) . " archivos:</p>
                             $listaHTML
                             <p><small>Log de ejecución disponible en el servidor.</small></p>";
             
@@ -158,7 +165,7 @@ class GenerateMonthlyReportsCommand extends Command
 
             return Command::SUCCESS;
 
-        } catch (\Throwable $e) { // <--- CAMBIO CRÍTICO: Throwable captura el error de FPDF
+        } catch (\Throwable $e) { 
             
             $msg = "Error Crítico Generando Reportes: " . $e->getMessage();
             $log($msg, 'CRITICAL');
