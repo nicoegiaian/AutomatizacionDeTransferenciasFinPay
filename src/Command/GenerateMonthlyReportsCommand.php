@@ -4,7 +4,7 @@ namespace App\Command;
 
 use App\Service\Report\MonthlySettlementService;
 use App\Service\Report\PdfReportGenerator;
-use App\Service\Notifier; // Tu servicio custom
+use App\Service\Notifier; 
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -43,7 +43,6 @@ class GenerateMonthlyReportsCommand extends Command
             ->addOption('month', null, InputOption::VALUE_OPTIONAL, 'Mes (1-12)')
             ->addOption('year', null, InputOption::VALUE_OPTIONAL, 'Año (ej: 2025)')
             ->addOption('test-one', null, InputOption::VALUE_NONE, 'Si se activa, solo genera 1 reporte individual para probar');
-            // Eliminada la opción email-report, se usa .env via Notifier
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -103,7 +102,7 @@ class GenerateMonthlyReportsCommand extends Command
                     $pdvFilesMap[$unidad][] = $path;
                     
                     $log(" -> OK PDF Individual [$unidad]: $razon");
-                } catch (\Exception $ePdv) {
+                } catch (\Throwable $ePdv) { // <--- CAMBIO: Throwable
                     $log("Fallo generando PDF de $razon: " . $ePdv->getMessage(), 'ERROR');
                 }
                 $i++;
@@ -111,12 +110,11 @@ class GenerateMonthlyReportsCommand extends Command
 
             // --- PASO 3: GENERAR MAESTROS ---
             $archivosFinales = []; 
-            $unitMasterFiles = []; // Guardamos los paths de las Unidades para pegarlos al Global
+            $unitMasterFiles = [];
 
             if ($i > 0) {
                 $log("=== Generando Archivos Maestros ===");
                 
-                // A. PRIMERO LAS UNIDADES (Porque el Global las necesita)
                 foreach ($mouraSummaries['units'] as $unitName => $unitData) {
                     $filesForUnit = $pdvFilesMap[$unitName] ?? [];
                     if (empty($filesForUnit)) continue;
@@ -126,26 +124,18 @@ class GenerateMonthlyReportsCommand extends Command
                         $log(" -> UNIDAD GENERADA [$unitName]: " . basename($unitPath));
                         
                         $archivosFinales[] = "UNIDAD [$unitName]: " . basename($unitPath);
-                        $unitMasterFiles[] = $unitPath; // Guardar para el Global
-                    } catch (\Exception $eUnit) {
+                        $unitMasterFiles[] = $unitPath;
+                    } catch (\Throwable $eUnit) { // <--- CAMBIO: Throwable
                         $log("Fallo generando Unidad $unitName: " . $eUnit->getMessage(), 'ERROR');
                     }
                 }
 
-                // B. REPORTE GLOBAL (Carátula Global + Todos los reportes de Unidades)
                 try {
-                    // Ahora pasamos $unitMasterFiles como adjuntos
-                    $globalPath = $this->pdfGenerator->generateGlobalMaster(
-                        $mouraSummaries['global'], 
-                        $unitMasterFiles, // <--- CAMBIO CLAVE
-                        $month, 
-                        $year
-                    );
+                    $globalPath = $this->pdfGenerator->generateGlobalMaster($mouraSummaries['global'], $unitMasterFiles, $month, $year);
                     $log(" -> GLOBAL GENERADO: " . basename($globalPath));
                     
-                    // Lo ponemos primero en la lista del mail
                     array_unshift($archivosFinales, "GLOBAL COMPLETO: " . basename($globalPath));
-                } catch (\Exception $eGlobal) {
+                } catch (\Throwable $eGlobal) { // <--- CAMBIO: Throwable
                     $log("Fallo generando Global: " . $eGlobal->getMessage(), 'ERROR');
                 }
             }
@@ -153,31 +143,27 @@ class GenerateMonthlyReportsCommand extends Command
             $log("=== PROCESO FINALIZADO OK ===");
 
             // --- EMAIL DE ÉXITO ---
-            // Usamos tu Notifier que lee MAIL_DESTINATION del .env
             $listaHTML = "<ul><li>" . implode("</li><li>", $archivosFinales) . "</li></ul>";
             $htmlBody = "<h3>Reportes Moura $month/$year: Generación Exitosa</h3>
                             <p>El proceso finalizó correctamente. Se han generado los siguientes archivos:</p>
                             $listaHTML
                             <p><small>Log de ejecución disponible en el servidor.</small></p>";
             
-            // Sin parámetro de destino, usa el interno
             $this->notifier->sendHtmlEmail(
                 "Reportes Moura $month/$year: Generación Exitosa", 
                 $htmlBody
             );
             
-            $log("Notificación de éxito enviada (Destino: " . $this->notifier->getDestination() . ")");
+            $log("Notificación de éxito enviada.");
 
             return Command::SUCCESS;
 
-        } catch (\Exception $e) {
-            // --- MANEJO DE ERROR CRÍTICO ---
+        } catch (\Throwable $e) { // <--- CAMBIO CRÍTICO: Throwable captura el error de FPDF
+            
             $msg = "Error Crítico Generando Reportes: " . $e->getMessage();
             $log($msg, 'CRITICAL');
             $log($e->getTraceAsString(), 'CRITICAL');
 
-            // --- EMAIL DE FALLO ---
-            // Sin parámetro de destino, usa el interno
             $this->notifier->sendFailureEmail(
                 "ALERTA: Falla Automatización Moura", 
                 "El proceso falló. Se adjunta log de ejecución.\n\nError: " . $e->getMessage(),
