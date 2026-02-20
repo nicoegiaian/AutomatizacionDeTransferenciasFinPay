@@ -354,8 +354,7 @@ class TransferManager
     private function getPendingTransfersData(string $fechaSQL): array
     {
         // 1. PDV
-        $queryPdv = "
-            SELECT 
+        $queryPdv = "SELECT 
                 SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto_pdv,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
@@ -365,8 +364,7 @@ class TransferManager
         $dataPdv = $this->dbConnection->executeQuery($queryPdv, ['fecha' => $fechaSQL])->fetchAssociative();
 
         // 2. FABRICANTE
-        $queryFab = "
-            SELECT 
+        $queryFab = "SELECT 
                 u.id as id_unidad,
                 u.nombre as nombre_unidad,
                 u.cbu as cbu_unidad,
@@ -384,10 +382,16 @@ class TransferManager
                             LIMIT 1
                         ) / 100 * 1.21
                     )
+                , 2) AS monto_calculado_old,
+                ROUND(
+                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
+                    - SUM(ld.subsidiomoura) 
+                    - SUM(ld.ivasubsidiomoura)
                 , 2) AS monto_calculado
             FROM transacciones t
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
+            INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
             AND DATE(t.fechapagobind) = :fecha
             AND t.transferencia_fabricante_procesada = 0  
             GROUP BY u.id, u.nombre, u.cbu
@@ -429,8 +433,7 @@ class TransferManager
 
     private function getPendingTransfersForPush(string $fechaSQL): array
     {
-        $query = "
-            SELECT 
+        $query = "SELECT 
                 p.id AS idpdv,
                 p.razonsocial,
                 p.cbu AS cbuDestino,
@@ -472,8 +475,7 @@ class TransferManager
         $procesadaInt = $marcarProcesada ? 1 : 0; 
         $idsList = implode(', ', $transaccionIds);
         
-        $sql = "
-            UPDATE transacciones 
+        $sql = "UPDATE transacciones 
             SET 
                 transferencia_procesada = :procesada, 
                 transferencia_estado = :estado, 
