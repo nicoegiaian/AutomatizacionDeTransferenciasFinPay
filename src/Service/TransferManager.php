@@ -59,33 +59,65 @@ class TransferManager
         $this->logger->info("=== INICIO PROCESO DE LIQUIDACIÓN MULTI-DESTINO ===");
         $this->logger->info("=== FECHA LOTE: $fechaLiquidacionDDMMAA");
         
-        // Verificamos si existe lote procesando
-        if ($this->checkExistingLote($fechaSQL)) {
-            $msg = "Ya existe un lote COMPLETED o PROCESSING para la fecha $fechaSQL";
-            $this->logger->warning($msg);
-            throw new \Exception($msg); 
+        // Verificamos si existe lote para esta fecha
+        $loteExistente = $this->checkExistingLote($fechaSQL);
+        $loteYaCompletado = false; // Flag para saber si ya estaba completado antes de esta ejecución
+        
+        if ($loteExistente) {
+            $loteId = $loteExistente['id'];
+            
+            if ($loteExistente['completed']) {
+                // Si está COMPLETED, consultamos las transferencias ya realizadas
+                $loteYaCompletado = true;
+                $this->logger->info("✅ Lote ID #$loteId ya está COMPLETED. Consultando transferencias realizadas...");
+            } else {
+                // Si está PROCESSING, lo retomamos
+                $this->logger->info("♻️  RETOMANDO Lote ID #$loteId (PROCESSING). Se procesarán solo las transferencias pendientes.");
+            }
+        } else {
+            // Si no existe, creamos uno nuevo
+            $this->dbConnection->insert('lotes_liquidacion', [
+                'fecha_liquidacion' => $fechaSQL,
+                'estado_actual_pdv' => 'PROCESSING',
+                'estado_actual_moura' => 'PROCESSING',
+                'monto_solicitado' => 0, 
+                'fecha_creacion' => (new \DateTime())->format('Y-m-d H:i:s'),
+            ]);
+            $loteId = $this->dbConnection->lastInsertId();
+            $this->logger->info("✨ Lote ID #$loteId creado. Estados: PROCESSING");
         }
-
-        // 1. Crear Lote PROCESSING
-        $this->dbConnection->insert('lotes_liquidacion', [
-            'fecha_liquidacion' => $fechaSQL,
-            'estado_actual_pdv' => 'PROCESSING',
-            'estado_actual_moura' => 'PROCESSING',
-            'monto_solicitado' => 0, 
-            'fecha_creacion' => (new \DateTime())->format('Y-m-d H:i:s'),
-        ]);
-        $loteId = $this->dbConnection->lastInsertId();
-        $this->logger->info("Lote ID #$loteId creado. Estados: PROCESSING");
 
         try {
             // 2. Cálculo de Montos
             $data = $this->getPendingTransfersData($fechaSQL);
             
-            // Si no hay nada, cerramos todo.
+            // Si no hay nada pendiente, devolvemos las transferencias ya completadas
             if ($data['total_monto'] <= 0) {
-                $this->logger->info("Sin montos pendientes. Cerrando lote vacío.");
+                $this->logger->info("✅ Sin montos pendientes. Consultando transferencias completadas...");
                 $this->closeLote($loteId, 'COMPLETED', 'COMPLETED'); 
-                return ['unidades' => [], 'info_adicional' => "No se encontraron montos pendientes."];
+                
+                // Obtener información del lote y las transferencias
+                $infoLote = $this->getLoteInfo($loteId);
+                $completadas = $this->getCompletedTransfersData($fechaSQL);
+                
+                // Generar mensaje según si ya estaba completado o se acaba de completar
+                if ($loteYaCompletado) {
+                    $mensajeResumen = "✅ Las transferencias de esta fecha ya fueron procesadas anteriormente.\n" .
+                                    "📅 Fecha de procesamiento: " . date('d/m/Y H:i:s', strtotime($infoLote['fecha_creacion'])) . "\n" .
+                                    "📊 Total: " . count($completadas['unidades']) . " unidades de negocio.";
+                } else {
+                    $mensajeResumen = "✅ Liquidación completada exitosamente.\n" .
+                                    "🕐 Procesado el: " . date('d/m/Y H:i:s') . "\n" .
+                                    "📊 Total: " . count($completadas['unidades']) . " unidades de negocio.";
+                }
+                
+                return [
+                    'unidades' => $completadas['unidades'], 
+                    'info_adicional' => $mensajeResumen,
+                    'lote_id' => $loteId,
+                    'fecha_procesamiento' => $infoLote['fecha_creacion'],
+                    'ya_procesado' => $loteYaCompletado
+                ];
             }
 
             // Actualizamos el lote
@@ -201,12 +233,7 @@ class TransferManager
                         $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '', false, $e->getMessage());
                         $detallePdv['estado'] = 'ERROR: ' . $e->getMessage();
                         $this->logDetallado("ERROR API PDV-$razonSocial", $e->getMessage());
-                    } catch (\App\Exception\DryRunException $e) {
-                        $this->updateTransactionStatus($pdv['transacciones_ids'], 'TRANSFERENCIA DRY RUN ', '', '', false, $e->getMessage());
-                        $this->logDetallado("SIMULACIÓN PDV-$nombreUnidad", $e->getMessage() . "\n" . $jsonLog);
-                        $detalleFab['estado'] = 'SIMULADA (DRY RUN)';
-                        $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
-                    } 
+                    }
                 }
                 
                 $agrupadorPorUnidad[$nombreUnidad]['pdvs'][] = $detallePdv;
@@ -354,8 +381,7 @@ class TransferManager
     private function getPendingTransfersData(string $fechaSQL): array
     {
         // 1. PDV
-        $queryPdv = "
-            SELECT 
+        $queryPdv = "SELECT 
                 SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto_pdv,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
@@ -365,8 +391,7 @@ class TransferManager
         $dataPdv = $this->dbConnection->executeQuery($queryPdv, ['fecha' => $fechaSQL])->fetchAssociative();
 
         // 2. FABRICANTE
-        $queryFab = "
-            SELECT 
+        $queryFab = "SELECT 
                 u.id as id_unidad,
                 u.nombre as nombre_unidad,
                 u.cbu as cbu_unidad,
@@ -384,10 +409,16 @@ class TransferManager
                             LIMIT 1
                         ) / 100 * 1.21
                     )
+                , 2) AS monto_calculado_old,
+                ROUND(
+                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
+                    - SUM(ld.subsidiomoura) 
+                    - SUM(ld.ivasubsidiomoura)
                 , 2) AS monto_calculado
             FROM transacciones t
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
+            INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
             AND DATE(t.fechapagobind) = :fecha
             AND t.transferencia_fabricante_procesada = 0  
             GROUP BY u.id, u.nombre, u.cbu
@@ -429,8 +460,7 @@ class TransferManager
 
     private function getPendingTransfersForPush(string $fechaSQL): array
     {
-        $query = "
-            SELECT 
+        $query = "SELECT 
                 p.id AS idpdv,
                 p.razonsocial,
                 p.cbu AS cbuDestino,
@@ -472,8 +502,7 @@ class TransferManager
         $procesadaInt = $marcarProcesada ? 1 : 0; 
         $idsList = implode(', ', $transaccionIds);
         
-        $sql = "
-            UPDATE transacciones 
+        $sql = "UPDATE transacciones 
             SET 
                 transferencia_procesada = :procesada, 
                 transferencia_estado = :estado, 
@@ -506,12 +535,35 @@ class TransferManager
         $this->dbConnection->executeStatement($sql);
     }
 
-    private function checkExistingLote(string $fechaSQL): bool
+    private function checkExistingLote(string $fechaSQL): ?array
     {
-        $sql = "SELECT id FROM lotes_liquidacion 
+        $sql = "SELECT id, estado_actual_pdv, estado_actual_moura 
+                FROM lotes_liquidacion 
                 WHERE fecha_liquidacion = :f 
-                AND (estado_actual_pdv IN ('PROCESSING', 'COMPLETED') OR estado_actual_moura IN ('PROCESSING', 'COMPLETED'))";
-        return (bool) $this->dbConnection->fetchOne($sql, ['f' => $fechaSQL]);
+                ORDER BY id DESC 
+                LIMIT 1";
+        $result = $this->dbConnection->fetchAssociative($sql, ['f' => $fechaSQL]);
+        
+        if (!$result) {
+            return null;
+        }
+        
+        // Verificamos si está completado
+        $isCompleted = ($result['estado_actual_pdv'] === 'COMPLETED' && $result['estado_actual_moura'] === 'COMPLETED');
+        
+        // Verificamos si está en proceso
+        $isProcessing = ($result['estado_actual_pdv'] === 'PROCESSING' || $result['estado_actual_moura'] === 'PROCESSING');
+        
+        if (!$isProcessing && !$isCompleted) {
+            // Si está en ERROR o PARTIAL_ERROR, permitimos recrear
+            return null;
+        }
+        
+        return [
+            'id' => (int) $result['id'],
+            'completed' => $isCompleted,
+            'processing' => $isProcessing
+        ];
     }
 
     private function closeLote(int $id, string $estadoPdv, string $estadoMoura = 'PENDING', array $detalleJson = []): void
@@ -526,6 +578,113 @@ class TransferManager
         }
 
         $this->dbConnection->update('lotes_liquidacion', $data, ['id' => $id]);
+    }
+
+    private function getLoteInfo(int $loteId): array
+    {
+        $sql = "SELECT id, fecha_liquidacion, fecha_creacion, estado_actual_pdv, estado_actual_moura, 
+                       monto_solicitado, monto_pdv, monto_fabricante
+                FROM lotes_liquidacion 
+                WHERE id = :id";
+        $result = $this->dbConnection->fetchAssociative($sql, ['id' => $loteId]);
+        
+        return $result ?: [];
+    }
+
+    private function getCompletedTransfersData(string $fechaSQL): array
+    {
+        $agrupadorPorUnidad = [];
+
+        // 1. Consultar PDVs completados
+        $queryPdvCompletos = "
+            SELECT 
+                p.id AS idpdv,
+                p.razonsocial,
+                u.nombre AS nombre_unidad,
+                p.cbu AS cbu_destino,
+                SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto,
+                t.transferencia_id_bind,
+                t.transferencia_estado,
+                t.fecha_transferencia
+            FROM transacciones t
+            JOIN puntosdeventa p ON t.idpdv = p.id
+            JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
+            WHERE DATE(t.fechapagobind) = :fecha 
+            AND t.transferencia_procesada = 1
+            GROUP BY p.id, p.razonsocial, u.nombre, p.cbu, t.transferencia_id_bind, t.transferencia_estado, t.fecha_transferencia
+        ";
+        
+        $pdvsCompletados = $this->dbConnection->executeQuery($queryPdvCompletos, ['fecha' => $fechaSQL])->fetchAllAssociative();
+
+        foreach ($pdvsCompletados as $pdv) {
+            $nombreUnidad = $pdv['nombre_unidad'] ?? 'SIN_UNIDAD';
+            
+            if (!isset($agrupadorPorUnidad[$nombreUnidad])) {
+                $agrupadorPorUnidad[$nombreUnidad] = [
+                    'nombre' => $nombreUnidad,
+                    'moura' => null,
+                    'pdvs' => []
+                ];
+            }
+
+            $monto = (float)$pdv['monto'];
+            $estado = $monto > 0 ? 'COMPLETADA' : 'OMITIDA (Monto 0)';
+            
+            $agrupadorPorUnidad[$nombreUnidad]['pdvs'][] = [
+                'razonsocial' => $pdv['razonsocial'],
+                'monto' => $monto,
+                'cbu_destino' => $pdv['cbu_destino'],
+                'estado' => $estado,
+                'bind_id' => $pdv['transferencia_id_bind'],
+                'fecha_transferencia' => $pdv['fecha_transferencia']
+            ];
+        }
+
+        // 2. Consultar Fabricante completado por unidad
+        $queryFabCompleto = "
+            SELECT 
+                u.id as id_unidad,
+                u.nombre as nombre_unidad,
+                u.cbu as cbu_unidad,
+                ROUND(
+                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
+                    - SUM(ld.subsidiomoura) 
+                    - SUM(ld.ivasubsidiomoura)
+                , 2) AS monto_calculado
+            FROM transacciones t
+            INNER JOIN puntosdeventa p ON t.idpdv = p.id
+            INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
+            INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
+            WHERE DATE(t.fechapagobind) = :fecha
+            AND t.transferencia_fabricante_procesada = 1
+            GROUP BY u.id, u.nombre, u.cbu
+        ";
+
+        $fabricantesCompletados = $this->dbConnection->executeQuery($queryFabCompleto, ['fecha' => $fechaSQL])->fetchAllAssociative();
+
+        foreach ($fabricantesCompletados as $fab) {
+            $nombreUnidad = $fab['nombre_unidad'];
+            
+            if (!isset($agrupadorPorUnidad[$nombreUnidad])) {
+                $agrupadorPorUnidad[$nombreUnidad] = [
+                    'nombre' => $nombreUnidad,
+                    'moura' => null,
+                    'pdvs' => []
+                ];
+            }
+
+            $monto = (float)$fab['monto_calculado'];
+            
+            $agrupadorPorUnidad[$nombreUnidad]['moura'] = [
+                'monto' => $monto,
+                'cbu_destino' => $fab['cbu_unidad'],
+                'estado' => $monto > 0 ? 'COMPLETADA' : 'OMITIDA (Sin saldo)'
+            ];
+        }
+
+        return [
+            'unidades' => array_values($agrupadorPorUnidad)
+        ];
     }
 
     private function logDetallado(string $titulo, string $contenido): void {
