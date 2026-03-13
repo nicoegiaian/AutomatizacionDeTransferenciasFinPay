@@ -50,7 +50,8 @@ class TransferManager
             file_put_contents($this->logFilePath, '');
         }
 
-        set_time_limit(0);          
+        set_time_limit(600); // 10 minutos máximo (protección contra procesos eternos)
+        ini_set('max_execution_time', '600');
         ignore_user_abort(true);    
 
         $fechaSQL = \DateTime::createFromFormat('dmy', $fechaLiquidacionDDMMAA)->format('Y-m-d');
@@ -71,8 +72,10 @@ class TransferManager
                 $loteYaCompletado = true;
                 $this->logger->info("✅ Lote ID #$loteId ya está COMPLETED. Consultando transferencias realizadas...");
             } else {
-                // Si está PROCESSING, lo retomamos
-                $this->logger->info("♻️  RETOMANDO Lote ID #$loteId (PROCESSING). Se procesarán solo las transferencias pendientes.");
+                // Si está PROCESSING o con errores, lo retomamos
+                $estadoPdv = $loteExistente['estado_pdv'] ?? 'UNKNOWN';
+                $estadoMoura = $loteExistente['estado_moura'] ?? 'UNKNOWN';
+                $this->logger->info("♻️  RETOMANDO Lote ID #$loteId (PDV: $estadoPdv, Moura: $estadoMoura). Se procesarán solo las transferencias pendientes.");
             }
         } else {
             // Si no existe, creamos uno nuevo
@@ -94,11 +97,15 @@ class TransferManager
             // Si no hay nada pendiente, devolvemos las transferencias ya completadas
             if ($data['total_monto'] <= 0) {
                 $this->logger->info("✅ Sin montos pendientes. Consultando transferencias completadas...");
+                
+                // Obtener las transferencias completadas
+                $completadas = $this->getCompletedTransfersData($fechaSQL);
+                
+                // Reconstruir transacciones_ids y detalle del lote con datos reales
+                $this->updateLoteConDatosCompletos($loteId, $fechaSQL);
                 $this->closeLote($loteId, 'COMPLETED', 'COMPLETED'); 
                 
-                // Obtener información del lote y las transferencias
                 $infoLote = $this->getLoteInfo($loteId);
-                $completadas = $this->getCompletedTransfersData($fechaSQL);
                 
                 // Generar mensaje según si ya estaba completado o se acaba de completar
                 if ($loteYaCompletado) {
@@ -120,12 +127,22 @@ class TransferManager
                 ];
             }
 
+            // Recopilamos TODOS los IDs de transacciones (PDV + Fabricante)
+            $todosLosIds = $data['transacciones_ids']; // IDs de PDV
+            foreach ($data['desglose_fabricante'] as $unidad) {
+                if (!empty($unidad['transacciones_ids_csv'])) {
+                    $idsFab = array_map('intval', explode(',', $unidad['transacciones_ids_csv']));
+                    $todosLosIds = array_merge($todosLosIds, $idsFab);
+                }
+            }
+            $todosLosIds = array_unique($todosLosIds);
+
             // Actualizamos el lote
             $this->dbConnection->update('lotes_liquidacion', [
                 'monto_solicitado' => $data['total_monto'],
                 'monto_pdv' => $data['monto_pdv'],
                 'monto_fabricante' => $data['monto_fabricante_total'], 
-                'transacciones_ids' => json_encode($data['transacciones_ids'])
+                'transacciones_ids' => json_encode($todosLosIds)
             ], ['id' => $loteId]);
             
             $this->logger->info("Montos: PDV Total: {$data['monto_pdv']} | Fab Total: {$data['monto_fabricante_total']}");
@@ -548,21 +565,32 @@ class TransferManager
             return null;
         }
         
-        // Verificamos si está completado
+        // Verificamos si está completado (ambos deben estar COMPLETED)
         $isCompleted = ($result['estado_actual_pdv'] === 'COMPLETED' && $result['estado_actual_moura'] === 'COMPLETED');
         
-        // Verificamos si está en proceso
-        $isProcessing = ($result['estado_actual_pdv'] === 'PROCESSING' || $result['estado_actual_moura'] === 'PROCESSING');
+        // Verificamos si está en proceso o con errores parciales (retomable)
+        $isProcessing = (
+            $result['estado_actual_pdv'] === 'PROCESSING' || 
+            $result['estado_actual_moura'] === 'PROCESSING' ||
+            $result['estado_actual_pdv'] === 'PARTIAL_ERROR' ||
+            $result['estado_actual_moura'] === 'PARTIAL_ERROR' ||
+            $result['estado_actual_pdv'] === 'ERROR' ||
+            $result['estado_actual_moura'] === 'ERROR'
+        );
         
+        // Solo permitimos crear nuevo lote si está COMPLETADO totalmente
+        // Cualquier otro estado (PROCESSING, ERROR, PARTIAL_ERROR) se retoma
         if (!$isProcessing && !$isCompleted) {
-            // Si está en ERROR o PARTIAL_ERROR, permitimos recrear
+            // Estado inesperado, permitimos recrear por seguridad
             return null;
         }
         
         return [
             'id' => (int) $result['id'],
             'completed' => $isCompleted,
-            'processing' => $isProcessing
+            'processing' => $isProcessing,
+            'estado_pdv' => $result['estado_actual_pdv'],
+            'estado_moura' => $result['estado_actual_moura']
         ];
     }
 
@@ -578,6 +606,72 @@ class TransferManager
         }
 
         $this->dbConnection->update('lotes_liquidacion', $data, ['id' => $id]);
+    }
+
+    /**
+     * Reconstruye los datos del lote con la información real de transacciones procesadas.
+     */
+    private function updateLoteConDatosCompletos(int $loteId, string $fechaSQL): void
+    {
+        // 1. Obtener TODOS los IDs de transacciones de esa fecha
+        $sqlIds = "SELECT GROUP_CONCAT(DISTINCT nrotransaccion ORDER BY nrotransaccion) as ids 
+                   FROM transacciones 
+                   WHERE DATE(fechapagobind) = :fecha";
+        $idsResult = $this->dbConnection->fetchAssociative($sqlIds, ['fecha' => $fechaSQL]);
+        $idsCsv = $idsResult['ids'] ?? '';
+        
+        $transaccionesIds = [];
+        if (!empty($idsCsv)) {
+            $transaccionesIds = array_map('intval', explode(',', $idsCsv));
+        }
+        
+        // 2. Obtener montos reales PDV (procesados)
+        $sqlPdv = "SELECT 
+                COALESCE(SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)), 0) AS monto_pdv
+            FROM transacciones t
+            WHERE DATE(t.fechapagobind) = :fecha 
+            AND t.transferencia_procesada = 1";
+        $dataPdv = $this->dbConnection->fetchAssociative($sqlPdv, ['fecha' => $fechaSQL]);
+        $montoPdv = (float)($dataPdv['monto_pdv'] ?? 0);
+        
+        // 3. Obtener montos y detalle reales Fabricante (procesados) por unidad
+        $sqlFab = "SELECT 
+                u.nombre as nombre_unidad,
+                ROUND(
+                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
+                    - SUM(ld.subsidiomoura) 
+                    - SUM(ld.ivasubsidiomoura)
+                , 2) AS monto_calculado
+            FROM transacciones t
+            INNER JOIN puntosdeventa p ON t.idpdv = p.id
+            INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
+            INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
+            WHERE DATE(t.fechapagobind) = :fecha
+            AND t.transferencia_fabricante_procesada = 1
+            GROUP BY u.id, u.nombre";
+        $fabricantes = $this->dbConnection->executeQuery($sqlFab, ['fecha' => $fechaSQL])->fetchAllAssociative();
+        
+        $montoFab = 0.0;
+        $detalleMoura = [];
+        foreach ($fabricantes as $fab) {
+            $montoFab += (float)$fab['monto_calculado'];
+            $detalleMoura[$fab['nombre_unidad']] = 'OK';
+        }
+        
+        // 4. Actualizar el lote con datos completos
+        $updateData = [
+            'transacciones_ids' => json_encode($transaccionesIds),
+            'monto_pdv' => $montoPdv,
+            'monto_fabricante' => $montoFab,
+            'monto_solicitado' => $montoPdv + $montoFab,
+        ];
+        
+        if (!empty($detalleMoura)) {
+            $updateData['detalle_moura_json'] = json_encode($detalleMoura);
+        }
+        
+        $this->dbConnection->update('lotes_liquidacion', $updateData, ['id' => $loteId]);
+        $this->logger->info("📝 Lote #$loteId actualizado con datos completos: " . count($transaccionesIds) . " transacciones, PDV: $montoPdv, Fab: $montoFab");
     }
 
     private function getLoteInfo(int $loteId): array

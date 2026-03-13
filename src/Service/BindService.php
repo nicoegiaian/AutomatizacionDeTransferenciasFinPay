@@ -59,7 +59,8 @@ class BindService implements BindServiceInterface
                 'headers' => [
                     'Authorization' => 'Bearer ' . $token,
                     'Content-Type' => 'application/json'
-                ]
+                ],
+                'timeout' => 30 // 30 segundos timeout para consultas de saldo
             ]);
 
             $statusCode = $response->getStatusCode();
@@ -116,6 +117,7 @@ class BindService implements BindServiceInterface
                 'headers' => [
                     'Content-Type' => 'application/x-www-form-urlencoded',
                 ],
+                'timeout' => 30 // 30 segundos timeout para autenticación
             ]);
             
             $data = $response->toArray(false); // Obtiene el JSON, lanza error en HTTP no 2xx
@@ -175,7 +177,8 @@ class BindService implements BindServiceInterface
                 'Authorization' => 'Bearer ' . $token,
                 'Content-Type' => 'application/json'
             ],
-            'json' => $payload
+            'json' => $payload,
+            'timeout' => 60 // 60 segundos timeout para transferencias (crítico)
         ]);
 
         $statusCode = $response->getStatusCode();
