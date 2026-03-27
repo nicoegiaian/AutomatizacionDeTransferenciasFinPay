@@ -177,9 +177,26 @@ class TransferManager
                     ];
                 }
 
+                // --- APLICAR DESCUENTOS PENDIENTES ---
+                $montoOriginal = $pdv['monto'];
+                $descuentosAplicados = $this->aplicarDescuentosPdv($idPdv, $pdv['monto'], $loteId);
+                $pdv['monto'] = $descuentosAplicados['monto_final'];
+                
+                if ($descuentosAplicados['total_descontado'] > 0) {
+                    $this->logger->info("    💰 PDV $razonSocial: Descuento aplicado \${$descuentosAplicados['total_descontado']} (Original: \$$montoOriginal → Final: \${$pdv['monto']})");
+                    $this->logDetallado("DESCUENTO PDV-$razonSocial", 
+                        "Monto original: \$$montoOriginal\n" .
+                        "Total descontado: \${$descuentosAplicados['total_descontado']}\n" .
+                        "Monto final a transferir: \${$pdv['monto']}\n" .
+                        "Descuentos aplicados: " . json_encode($descuentosAplicados['detalle'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
+                    );
+                }
+
                 $detallePdv = [
                     'razonsocial' => $razonSocial, 
                     'monto' => $pdv['monto'],
+                    'monto_original' => $montoOriginal,
+                    'descuentos_aplicados' => $descuentosAplicados['total_descontado'],
                     'cbu_destino' => $pdv['cbu'],
                     'estado' => 'PENDIENTE'
                 ];
@@ -290,9 +307,26 @@ class TransferManager
                         'pdvs' => []
                     ];
                 }
+
+                // --- APLICAR DESCUENTOS PENDIENTES A FABRICANTE ---
+                $montoOriginalFab = $montoUnidad;
+                $descuentosFab = $this->aplicarDescuentosUnidad($idUnidad, $montoUnidad, $loteId);
+                $montoUnidad = $descuentosFab['monto_final'];
+                
+                if ($descuentosFab['total_descontado'] > 0) {
+                    $this->logger->info("    💰 FAB $nombreUnidad: Descuento aplicado \${$descuentosFab['total_descontado']} (Original: \$$montoOriginalFab → Final: \$$montoUnidad)");
+                    $this->logDetallado("DESCUENTO FAB-$nombreUnidad", 
+                        "Monto original: \$$montoOriginalFab\n" .
+                        "Total descontado: \${$descuentosFab['total_descontado']}\n" .
+                        "Monto final a transferir: \$$montoUnidad\n" .
+                        "Descuentos aplicados: " . json_encode($descuentosFab['detalle'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
+                    );
+                }
                 
                 $detalleFab = [
                     'monto' => $montoUnidad,
+                    'monto_original' => $montoOriginalFab,
+                    'descuentos_aplicados' => $descuentosFab['total_descontado'],
                     'cbu_destino' => $cbuUnidad,
                     'estado' => 'PENDIENTE'
                 ];
@@ -322,8 +356,14 @@ class TransferManager
                         // LÓGICA DE UPDATE DE ESTADO
                         if (isset($resFab['estado']) && $resFab['estado'] === 'SIMULATED') {
                             // --- CASO SIMULADO ---
-                            // Marcamos en BD (lógica específica de fabricante)
-                            $this->updateFabricanteStatus($unidad['transacciones_ids_csv'] ?? '');
+                            $simBindId = $resFab['comprobanteId'] ?? 'SIM-NO-ID';
+                            $this->updateFabricanteStatus(
+                                $unidad['transacciones_ids_csv'] ?? '',
+                                'SIMULADA',
+                                $simBindId,
+                                null,
+                                'Simulación DRY RUN'
+                            );
                             
                             $this->logDetallado("SIMULACIÓN FAB-$nombreUnidad", "Payload simulado:\n" . json_encode($resFab['payload_debug'] ?? [], JSON_PRETTY_PRINT));
                             $detalleFab['estado'] = 'SIMULADA (DRY RUN)';           
@@ -331,9 +371,16 @@ class TransferManager
                             
                         } else {
                             // --- CASO REAL ---
-                            $this->updateFabricanteStatus($unidad['transacciones_ids_csv'] ?? '');
-                            
                             $bindId = $resFab['comprobanteId'] ?? 'OK-NO-ID';
+                            $coelsaIdFab = $resFab['coelsaId'] ?? null;
+                            $this->updateFabricanteStatus(
+                                $unidad['transacciones_ids_csv'] ?? '',
+                                'COMPLETADA',
+                                $bindId,
+                                $coelsaIdFab,
+                                json_encode($resFab)
+                            );
+                            
                             $this->logger->info("    -> OK Fab $nombreUnidad (ID: $bindId)");
                             
                             $detalleFab['estado'] = 'ENVIADA';
@@ -342,7 +389,13 @@ class TransferManager
                         }
 
                     } catch (\App\Exception\DryRunException $e) {
-                        $this->updateFabricanteStatus($unidad['transacciones_ids_csv'] ?? '');
+                        $this->updateFabricanteStatus(
+                            $unidad['transacciones_ids_csv'] ?? '',
+                            'SIMULADA',
+                            null,
+                            null,
+                            'DryRun: ' . $e->getMessage()
+                        );
                         $this->logDetallado("SIMULACIÓN FAB-$nombreUnidad", $e->getMessage() . "\n" . $jsonLog);
                         $detalleFab['estado'] = 'SIMULADA (DRY RUN)';
                         $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
@@ -539,7 +592,7 @@ class TransferManager
         ]);
     }
 
-    private function updateFabricanteStatus(string $idsCsv): void
+    private function updateFabricanteStatus(string $idsCsv, string $estado = 'COMPLETADA', ?string $bindId = null, ?string $coelsaId = null, ?string $respuestaBind = null): void
     {
         if (empty($idsCsv)) return;
         
@@ -548,8 +601,22 @@ class TransferManager
 
         if (empty($idsList)) return;
 
-        $sql = "UPDATE transacciones SET transferencia_fabricante_procesada = 1 WHERE nrotransaccion IN ($idsList)";
-        $this->dbConnection->executeStatement($sql);
+        $sql = "UPDATE transacciones 
+            SET 
+                transferencia_fabricante_procesada = 1,
+                transferencia_fabricante_estado = :estado,
+                transferencia_fabricante_id_bind = :bind_id,
+                coelsa_id_fabricante = :coelsa_id,
+                respuesta_BIND_fabricante = :respuesta,
+                fecha_transferencia_fabricante = NOW()
+            WHERE nrotransaccion IN ($idsList)";
+        
+        $this->dbConnection->executeStatement($sql, [
+            'estado' => $estado,
+            'bind_id' => $bindId,
+            'coelsa_id' => $coelsaId,
+            'respuesta' => $respuestaBind
+        ]);
     }
 
     private function checkExistingLote(string $fechaSQL): ?array
@@ -789,6 +856,75 @@ class TransferManager
                           $contenido . "\n" . 
                           $separador . "\n";
         file_put_contents($this->logFilePath, $mensajeLegible, FILE_APPEND);   
+    }
+
+    /**
+     * Aplica descuentos pendientes a un PDV. 
+     * Resta del monto a transferir y marca cada descuento como "Descontado".
+     */
+    private function aplicarDescuentosPdv(int $idPdv, float $monto, int $loteId): array
+    {
+        $descuentos = $this->dbConnection->fetchAllAssociative(
+            "SELECT id, monto FROM descuentos_transferencias WHERE idpdv = :idpdv AND estado = 'Pendiente' AND borrado_en IS NULL ORDER BY creado_en ASC",
+            ['idpdv' => $idPdv]
+        );
+
+        return $this->procesarDescuentos($descuentos, $monto, $loteId);
+    }
+
+    /**
+     * Aplica descuentos pendientes a una Unidad de Negocio.
+     */
+    private function aplicarDescuentosUnidad(int $idUnidad, float $monto, int $loteId): array
+    {
+        $descuentos = $this->dbConnection->fetchAllAssociative(
+            "SELECT id, monto FROM descuentos_transferencias WHERE id_unidad_negocio = :idUnidad AND estado = 'Pendiente' AND borrado_en IS NULL ORDER BY creado_en ASC",
+            ['idUnidad' => $idUnidad]
+        );
+
+        return $this->procesarDescuentos($descuentos, $monto, $loteId);
+    }
+
+    /**
+     * Procesa una lista de descuentos pendientes contra un monto a transferir.
+     * Descuenta lo máximo posible (sin dejar el monto en negativo).
+     */
+    private function procesarDescuentos(array $descuentos, float $montoOriginal, int $loteId): array
+    {
+        $montoFinal = $montoOriginal;
+        $totalDescontado = 0.0;
+        $detalle = [];
+
+        foreach ($descuentos as $desc) {
+            if ($montoFinal <= 0) break;
+
+            $montoDescuento = (float)$desc['monto'];
+            $aplicar = min($montoDescuento, $montoFinal);
+            
+            $montoFinal -= $aplicar;
+            $totalDescontado += $aplicar;
+            
+            // Marcar como descontado en BD
+            $this->dbConnection->update('descuentos_transferencias', [
+                'estado' => 'Descontado',
+                'monto_descontado' => $aplicar,
+                'lote_liquidacion_id' => $loteId,
+                'fecha_descuento' => (new \DateTime())->format('Y-m-d H:i:s'),
+                'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
+            ], ['id' => $desc['id']]);
+
+            $detalle[] = [
+                'descuento_id' => $desc['id'],
+                'monto_descuento' => $montoDescuento,
+                'monto_aplicado' => $aplicar,
+            ];
+        }
+
+        return [
+            'monto_final' => round($montoFinal, 2),
+            'total_descontado' => round($totalDescontado, 2),
+            'detalle' => $detalle,
+        ];
     }
 
     // Código comentado de DEBIN omitido intencionalmente
