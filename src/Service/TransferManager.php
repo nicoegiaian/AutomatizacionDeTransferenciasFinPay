@@ -226,7 +226,21 @@ class TransferManager
 
                 } else {
                     try {
-                        
+                        // Validación anti-duplicado: consultar movimientos BIND
+                        if ($this->enableRealTransfer) {
+                            $movExistente = $this->bindService->existeTransferenciaPrevia($pdv['cbu'], $pdv['monto'], $fechaSQL);
+                            if ($movExistente !== null) {
+                                $bindIdExistente = $movExistente['idOperacion'] ?? 'ENCONTRADO';
+                                $coelsaIdExistente = $movExistente['coelsaId'] ?? null;
+                                $this->logger->warning("    ⚠️ PDV $idPdv ($razonSocial): Transferencia YA EXISTE en BIND (ID: $bindIdExistente). Marcando sin re-enviar.");
+                                $this->logDetallado("DUPLICADO PDV-$razonSocial", "Transferencia encontrada en BIND. ID: $bindIdExistente\nMonto: {$pdv['monto']}\nCBU: {$pdv['cbu']}");
+                                $this->updateTransactionStatus($pdv['transacciones_ids'], 'COMPLETADA', (string)$bindIdExistente, $coelsaIdExistente, true, 'Ya transferido en BIND');
+                                $detallePdv['estado'] = 'YA TRANSFERIDO (BIND)';
+                                $agrupadorPorUnidad[$nombreUnidad]['pdvs'][] = $detallePdv;
+                                continue;
+                            }
+                        }
+
                             $res = $this->bindService->transferToThirdParty(
                             $pdv['cbu'], 
                             $pdv['monto'], 
@@ -341,6 +355,28 @@ class TransferManager
                     $this->logDetallado("ERROR-CONFIG-FAB-$nombreUnidad", "CBU Vacío. Intento:\n$jsonLog");
                 } else {
                     try {
+                        // Validación anti-duplicado: consultar movimientos BIND
+                        if ($this->enableRealTransfer) {
+                            $movExistenteFab = $this->bindService->existeTransferenciaPrevia($cbuUnidad, $montoUnidad, $fechaSQL);
+                            if ($movExistenteFab !== null) {
+                                $bindIdExistente = $movExistenteFab['idOperacion'] ?? 'ENCONTRADO';
+                                $coelsaIdExistente = $movExistenteFab['coelsaId'] ?? null;
+                                $this->logger->warning("    ⚠️ FAB $nombreUnidad: Transferencia YA EXISTE en BIND (ID: $bindIdExistente). Marcando sin re-enviar.");
+                                $this->logDetallado("DUPLICADO FAB-$nombreUnidad", "Transferencia encontrada en BIND. ID: $bindIdExistente\nMonto: $montoUnidad\nCBU: $cbuUnidad");
+                                $this->updateFabricanteStatus(
+                                    $unidad['transacciones_ids_csv'] ?? '',
+                                    'COMPLETADA',
+                                    (string)$bindIdExistente,
+                                    $coelsaIdExistente,
+                                    'Ya transferido en BIND'
+                                );
+                                $detalleFab['estado'] = 'YA TRANSFERIDO (BIND)';
+                                $detalleMouraLog[$nombreUnidad] = 'OK';
+                                $agrupadorPorUnidad[$nombreUnidad]['moura'] = $detalleFab;
+                                continue;
+                            }
+                        }
+
                         // Intentamos Transferir
                             $resFab = $this->bindService->transferToThirdParty(
                             $cbuUnidad, 
@@ -482,7 +518,7 @@ class TransferManager
                 , 2) AS monto_calculado_old,
                 ROUND(
                     SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
-                    - SUM(ld.subsidiomoura) 
+                    - SUM(ld.subsidiomoura)
                     - SUM(ld.ivasubsidiomoura)
                 , 2) AS monto_calculado
             FROM transacciones t

@@ -48,6 +48,16 @@ public function transferToThirdParty(string $cbuDestino, float $monto, ?string $
         // no falle por falta de fondos.
         return 500000.00; 
     }
+
+    public function getMovimientos(string $fechaDesde, string $fechaHasta, int $pageNumber = 0, int $pageSize = 500): array
+    {
+        return ['items' => []];
+    }
+
+    public function existeTransferenciaPrevia(string $cbuDestino, float $monto, string $fecha): ?array
+    {
+        return null;
+    }
     
   
 }

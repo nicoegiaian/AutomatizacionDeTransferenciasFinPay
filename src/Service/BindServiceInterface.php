@@ -13,5 +13,7 @@ interface BindServiceInterface
 
     public function getAccountBalance(string $cvu): float;
 
-    // Si hay más métodos públicos usados por TransferManager, deben ir aquí.
+    public function getMovimientos(string $fechaDesde, string $fechaHasta, int $pageNumber = 0, int $pageSize = 500): array;
+
+    public function existeTransferenciaPrevia(string $cbuDestino, float $monto, string $fecha): ?array;
 }

@@ -15,6 +15,7 @@ class BindService implements BindServiceInterface
     private HttpClientInterface $httpClient;
     private const TRANSFER_ENDPOINT = '/walletentidad-operaciones/v1/api/v1.201/transferir';
     private const ACCOUNT_INFO_ENDPOINT = '/walletentidad-cuenta/v1/api/v1.201/SaldoActualByCVU';
+    private const MOVIMIENTOS_ENDPOINT = '/walletentidad-operaciones/v1/api/v1.201/MovimientosOperaciones';
     private string $tokenUrl;
     private string $scope;
     private ?string $accessToken = null;
@@ -194,5 +195,70 @@ class BindService implements BindServiceInterface
         $data['audit_cvu_origen'] = $origenAUtilizar;
         $data['estado'] = 'COMPLETED'; // Normalizamos el estado para facilitar chequeos
         return $data;
+    }
+
+    /**
+     * Consulta los movimientos de operaciones en BIND para un rango de fechas.
+     * @return array Lista de movimientos.
+     */
+    public function getMovimientos(string $fechaDesde, string $fechaHasta, int $pageNumber = 0, int $pageSize = 500): array
+    {
+        $token = $this->getAccessToken();
+        $url = $this->apiUrl . self::MOVIMIENTOS_ENDPOINT;
+
+        $response = $this->httpClient->request('GET', $url, [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $token,
+                'Content-Type' => 'application/json'
+            ],
+            'query' => [
+                'fechaDesde' => $fechaDesde,
+                'fechaHasta' => $fechaHasta,
+                'pageNumber' => $pageNumber,
+                'pageSize' => $pageSize,
+            ],
+            'timeout' => 30
+        ]);
+
+        $statusCode = $response->getStatusCode();
+        $data = $response->toArray(false);
+
+        if ($statusCode !== 200) {
+            $errorMsg = $data['mensaje'] ?? json_encode($data);
+            throw new \RuntimeException("Error al consultar movimientos BIND: $errorMsg");
+        }
+
+        return $data;
+    }
+
+    /**
+     * Verifica si ya existe una transferencia realizada hoy para un CBU y monto dados.
+     * Recorre todas las páginas de movimientos si es necesario.
+     * @return array|null Retorna el movimiento encontrado o null si no existe.
+     */
+    public function existeTransferenciaPrevia(string $cbuDestino, float $monto, string $fecha): ?array
+    {
+        $pageNumber = 0;
+        $pageSize = 500;
+
+        do {
+            $movimientos = $this->getMovimientos($fecha, $fecha, $pageNumber, $pageSize);
+
+            $items = $movimientos['movimientosOperaciones'] ?? [];
+            $totalPages = $movimientos['totalPages'] ?? 1;
+
+            foreach ($items as $mov) {
+                $cbuMov = $mov['cbuCvuContraparte'] ?? null;
+                $montoMov = isset($mov['importe']) ? (float)$mov['importe'] : null;
+
+                if ($cbuMov === $cbuDestino && $montoMov !== null && abs($montoMov - $monto) < 0.01) {
+                    return $mov;
+                }
+            }
+
+            $pageNumber++;
+        } while ($pageNumber < $totalPages);
+
+        return null;
     }
 }
