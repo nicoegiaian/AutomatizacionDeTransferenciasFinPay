@@ -43,12 +43,12 @@ class MonthlySettlementService
             SUM(ivacomisionpd + ivacomisionprontopago + ivadescuentocuotas + ivacostoacreditacion + ivaaranceltarjeta) as 'iva',
             SUM(sirtac + otrosimpuestos) as 'otros_impuestos',
             SUM(IFNULL(beneficiocredmoura, 0)) as 'beneficio_credmoura',
-            SUM(importeprimervenc) as 'total_neto',
+            SUM(cac.totalneto) as 'total_neto',
             SUM(ROUND((
-                importeprimervenc * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100
+                cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100
             ), 2)) as 'acred_cc_com',
             SUM(ROUND((
-                importeprimervenc * CAST(SUBSTRING_INDEX(estadocheque, '-', -1) AS DECIMAL(5,2)) / 100
+                cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', -1) AS DECIMAL(5,2)) / 100
             ), 2)) as 'acred_cc_moura',
 
             0 as 'Subsidio Moura',
@@ -56,6 +56,7 @@ class MonthlySettlementService
             0 as 'Transferencia Moura'
             FROM
             transacciones
+            INNER JOIN calculos_ahorro_credmoura cac ON transacciones.nrotransaccion = cac.nrotransaccion
             INNER JOIN liquidacionesdetalle ON transacciones.nrotransaccion = liquidacionesdetalle.nrotransaccion    
             INNER JOIN puntosdeventa ON puntosdeventa.id = transacciones.idpdv
             LEFT JOIN unidadesdenegocio ON puntosdeventa.idunidadnegocio = unidadesdenegocio.id -- JOIN NUEVO
@@ -163,12 +164,13 @@ class MonthlySettlementService
                 SUM(IF(metodopago = 'PR', importecheque, 0)) as monto_prepago,
                 COUNT(transacciones.nrotransaccion) as 'transacciones',
                 SUM(importecheque) as 'bruto',
-                SUM(importeprimervenc) as 'neto_percibido',
-                SUM(ROUND((importeprimervenc * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cuenta_comercio',
-                SUM(ROUND((importeprimervenc * CAST(SUBSTRING_INDEX(estadocheque, '-', -1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cc_moura',
+                SUM(cac.totalneto) as 'neto_percibido',
+                SUM(ROUND((cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cuenta_comercio',
+                SUM(ROUND((cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', -1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cc_moura',
                 SUM(liquidacionesdetalle.subsidiomoura) as 'total_subsidio',
                 SUM(liquidacionesdetalle.ivasubsidiomoura) as 'total_iva_subsidio'
             FROM transacciones
+            INNER JOIN calculos_ahorro_credmoura cac ON transacciones.nrotransaccion = cac.nrotransaccion
             INNER JOIN liquidacionesdetalle ON transacciones.nrotransaccion = liquidacionesdetalle.nrotransaccion    
             INNER JOIN puntosdeventa ON puntosdeventa.id = transacciones.idpdv
             INNER JOIN unidadesdenegocio ON puntosdeventa.idunidadnegocio = unidadesdenegocio.id

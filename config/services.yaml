@@ -55,6 +55,7 @@ services:
             $finpaySettlementLogger: '@monolog.logger.finpay_settlement'
             $logFilePath: '%kernel.logs_dir%/transferencias_diarias.log'
             $BIND_ENABLE_REAL_TRANSFER: '%env(bool:BIND_ENABLE_REAL_TRANSFER)%'
+            $BIND_SKIP_DUPLICATE_CHECK: '%env(bool:BIND_SKIP_DUPLICATE_CHECK)%'
             $jsonLogger: '@monolog.logger.bind_json'
     
     App\Service\MuteSettlementService:

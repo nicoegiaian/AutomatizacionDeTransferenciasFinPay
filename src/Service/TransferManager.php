@@ -18,6 +18,7 @@ class TransferManager
     private LoggerInterface $jsonLogger;
     private string $logFilePath; 
     private bool $enableRealTransfer;
+    private bool $skipDuplicateCheck;
 
     public function __construct(
         BindServiceInterface $bindService, 
@@ -26,6 +27,7 @@ class TransferManager
         LoggerInterface $finpaySettlementLogger, 
         string $logFilePath, 
         bool $BIND_ENABLE_REAL_TRANSFER,
+        bool $BIND_SKIP_DUPLICATE_CHECK,
         LoggerInterface $jsonLogger 
         )
     {
@@ -35,6 +37,7 @@ class TransferManager
         $this->logger = $finpaySettlementLogger;
         $this->logFilePath = $logFilePath;
         $this->enableRealTransfer = $BIND_ENABLE_REAL_TRANSFER;
+        $this->skipDuplicateCheck = $BIND_SKIP_DUPLICATE_CHECK;
         $this->jsonLogger = $jsonLogger;
         }
 
@@ -227,7 +230,7 @@ class TransferManager
                 } else {
                     try {
                         // Validación anti-duplicado: consultar movimientos BIND
-                        if ($this->enableRealTransfer) {
+                        if ($this->enableRealTransfer && !$this->skipDuplicateCheck) {
                             $movExistente = $this->bindService->existeTransferenciaPrevia($pdv['cbu'], $pdv['monto'], $fechaSQL);
                             if ($movExistente !== null) {
                                 $bindIdExistente = $movExistente['idOperacion'] ?? 'ENCONTRADO';
@@ -281,6 +284,8 @@ class TransferManager
                         $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '', false, $e->getMessage());
                         $detallePdv['estado'] = 'ERROR: ' . $e->getMessage();
                         $this->logDetallado("ERROR API PDV-$razonSocial", $e->getMessage());
+                        // Revertir descuentos para que se re-apliquen en el próximo intento
+                        $this->revertirDescuentosLote($loteId, $idPdv, null);
                     }
                 }
                 
@@ -304,24 +309,6 @@ class TransferManager
                 $montoUnidad = (float)$unidad['monto_calculado'];
                 $idUnidad = $unidad['id_unidad'];
 
-                $payloadLog = [
-                    'unidad_negocio' => $nombreUnidad,
-                    'cbu_destino' => $cbuUnidad,
-                    'importe' => $montoUnidad,
-                    'concepto' => 'Liquidacion Fabricante',
-                    'referencia_interna' => "FAB-{$idUnidad}-" . date('His'),
-                    'fecha_proceso' => date('Y-m-d H:i:s')
-                ];
-                $jsonLog = json_encode($payloadLog, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-                
-                if (!isset($agrupadorPorUnidad[$nombreUnidad])) {
-                    $agrupadorPorUnidad[$nombreUnidad] = [
-                        'nombre' => $nombreUnidad,
-                        'moura' => null,
-                        'pdvs' => []
-                    ];
-                }
-
                 // --- APLICAR DESCUENTOS PENDIENTES A FABRICANTE ---
                 $montoOriginalFab = $montoUnidad;
                 $descuentosFab = $this->aplicarDescuentosUnidad($idUnidad, $montoUnidad, $loteId);
@@ -335,6 +322,25 @@ class TransferManager
                         "Monto final a transferir: \$$montoUnidad\n" .
                         "Descuentos aplicados: " . json_encode($descuentosFab['detalle'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
                     );
+                }
+
+                $payloadLog = [
+                    'unidad_negocio' => $nombreUnidad,
+                    'cbu_destino' => $cbuUnidad,
+                    'importe' => $montoUnidad,
+                    'importe_original' => $montoOriginalFab,
+                    'concepto' => 'Liquidacion Fabricante',
+                    'referencia_interna' => "FAB-{$idUnidad}-" . date('His'),
+                    'fecha_proceso' => date('Y-m-d H:i:s')
+                ];
+                $jsonLog = json_encode($payloadLog, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+                
+                if (!isset($agrupadorPorUnidad[$nombreUnidad])) {
+                    $agrupadorPorUnidad[$nombreUnidad] = [
+                        'nombre' => $nombreUnidad,
+                        'moura' => null,
+                        'pdvs' => []
+                    ];
                 }
                 
                 $detalleFab = [
@@ -356,7 +362,7 @@ class TransferManager
                 } else {
                     try {
                         // Validación anti-duplicado: consultar movimientos BIND
-                        if ($this->enableRealTransfer) {
+                        if ($this->enableRealTransfer && !$this->skipDuplicateCheck) {
                             $movExistenteFab = $this->bindService->existeTransferenciaPrevia($cbuUnidad, $montoUnidad, $fechaSQL);
                             if ($movExistenteFab !== null) {
                                 $bindIdExistente = $movExistenteFab['idOperacion'] ?? 'ENCONTRADO';
@@ -446,6 +452,8 @@ class TransferManager
                         
                         $detalleFab['estado'] = 'ERROR: ' . $e->getMessage();
                         $detalleMouraLog[$nombreUnidad] = 'ERROR_API: ' . $e->getMessage();
+                        // Revertir descuentos para que se re-apliquen en el próximo intento
+                        $this->revertirDescuentosLote($loteId, null, $idUnidad);
                     }
                 }
 
@@ -488,9 +496,10 @@ class TransferManager
     {
         // 1. PDV
         $queryPdv = "SELECT 
-                SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto_pdv,
+                SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto_pdv,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             WHERE DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 0
         ";
@@ -503,7 +512,7 @@ class TransferManager
                 u.cbu as cbu_unidad,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv, 
                 ROUND(
-                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
+                    SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
                     - 
                     (
                         SUM(t.importecheque) * (
@@ -517,11 +526,12 @@ class TransferManager
                     )
                 , 2) AS monto_calculado_old,
                 ROUND(
-                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
+                    SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
                     - SUM(ld.subsidiomoura)
                     - SUM(ld.ivasubsidiomoura)
                 , 2) AS monto_calculado
             FROM transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
             INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
@@ -571,9 +581,10 @@ class TransferManager
                 p.razonsocial,
                 p.cbu AS cbuDestino,
                 u.nombre AS nombre_unidad,  
-                SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS total_monto,
+                SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS total_monto,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             JOIN puntosdeventa p ON t.idpdv = p.id
             JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id 
             LEFT JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
@@ -730,8 +741,9 @@ class TransferManager
         
         // 2. Obtener montos reales PDV (procesados)
         $sqlPdv = "SELECT 
-                COALESCE(SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)), 0) AS monto_pdv
+                COALESCE(SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)), 0) AS monto_pdv
             FROM transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             WHERE DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 1";
         $dataPdv = $this->dbConnection->fetchAssociative($sqlPdv, ['fecha' => $fechaSQL]);
@@ -741,11 +753,12 @@ class TransferManager
         $sqlFab = "SELECT 
                 u.nombre as nombre_unidad,
                 ROUND(
-                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
+                    SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
                     - SUM(ld.subsidiomoura) 
                     - SUM(ld.ivasubsidiomoura)
                 , 2) AS monto_calculado
             FROM transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
             INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
@@ -799,11 +812,12 @@ class TransferManager
                 p.razonsocial,
                 u.nombre AS nombre_unidad,
                 p.cbu AS cbu_destino,
-                SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto,
+                SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto,
                 t.transferencia_id_bind,
                 t.transferencia_estado,
                 t.fecha_transferencia
             FROM transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             JOIN puntosdeventa p ON t.idpdv = p.id
             JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
             WHERE DATE(t.fechapagobind) = :fecha 
@@ -844,11 +858,12 @@ class TransferManager
                 u.nombre as nombre_unidad,
                 u.cbu as cbu_unidad,
                 ROUND(
-                    SUM(ROUND((((t.importeprimervenc) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
+                    SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
                     - SUM(ld.subsidiomoura) 
                     - SUM(ld.ivasubsidiomoura)
                 , 2) AS monto_calculado
             FROM transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
             INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
@@ -941,18 +956,32 @@ class TransferManager
             $totalDescontado += $aplicar;
             
             // Marcar como descontado en BD
-            $this->dbConnection->update('descuentos_transferencias', [
-                'estado' => 'Descontado',
-                'monto_descontado' => $aplicar,
-                'lote_liquidacion_id' => $loteId,
-                'fecha_descuento' => (new \DateTime())->format('Y-m-d H:i:s'),
-                'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
-            ], ['id' => $desc['id']]);
+            if ($aplicar < $montoDescuento) {
+                // Descuento parcial: reducir el monto al remanente y dejarlo Pendiente
+                $remanente = round($montoDescuento - $aplicar, 2);
+                $this->dbConnection->update('descuentos_transferencias', [
+                    'monto' => $remanente,
+                    'monto_descontado' => $aplicar,
+                    'lote_liquidacion_id' => $loteId,
+                    'fecha_descuento' => (new \DateTime())->format('Y-m-d H:i:s'),
+                    'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
+                ], ['id' => $desc['id']]);
+            } else {
+                // Descuento completo
+                $this->dbConnection->update('descuentos_transferencias', [
+                    'estado' => 'Descontado',
+                    'monto_descontado' => $aplicar,
+                    'lote_liquidacion_id' => $loteId,
+                    'fecha_descuento' => (new \DateTime())->format('Y-m-d H:i:s'),
+                    'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
+                ], ['id' => $desc['id']]);
+            }
 
             $detalle[] = [
                 'descuento_id' => $desc['id'],
                 'monto_descuento' => $montoDescuento,
                 'monto_aplicado' => $aplicar,
+                'remanente' => $aplicar < $montoDescuento ? round($montoDescuento - $aplicar, 2) : 0,
             ];
         }
 
@@ -961,6 +990,29 @@ class TransferManager
             'total_descontado' => round($totalDescontado, 2),
             'detalle' => $detalle,
         ];
+    }
+
+    /**
+     * Revierte descuentos marcados como 'Descontado' para un lote+PDV o lote+Unidad.
+     * Se usa cuando la transferencia falla para que el próximo intento los re-aplique.
+     */
+    private function revertirDescuentosLote(int $loteId, ?int $idPdv, ?int $idUnidad): void
+    {
+        $where = ['lote_liquidacion_id' => $loteId, 'estado' => 'Descontado'];
+        if ($idPdv !== null) {
+            $where['idpdv'] = $idPdv;
+        }
+        if ($idUnidad !== null) {
+            $where['id_unidad_negocio'] = $idUnidad;
+        }
+
+        $this->dbConnection->update('descuentos_transferencias', [
+            'estado' => 'Pendiente',
+            'monto_descontado' => null,
+            'lote_liquidacion_id' => null,
+            'fecha_descuento' => null,
+            'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
+        ], $where);
     }
 
     // Código comentado de DEBIN omitido intencionalmente

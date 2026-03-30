@@ -65,7 +65,16 @@ class BindService implements BindServiceInterface
             ]);
 
             $statusCode = $response->getStatusCode();
-            $data = $response->toArray(false);
+            $rawBody = $response->getContent(false);
+
+            if (empty(trim($rawBody))) {
+                throw new \RuntimeException("BIND Saldo Error (HTTP {$statusCode}): La respuesta está vacía para CVU {$cvu}");
+            }
+
+            $data = json_decode($rawBody, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new \RuntimeException("BIND Saldo Error (HTTP {$statusCode}): Respuesta no es JSON válido. Body: " . substr($rawBody, 0, 500));
+            }
 
             if ($statusCode !== 200) {
                  $errorMsg = $data['mensaje'] ?? json_encode($data);
@@ -121,8 +130,17 @@ class BindService implements BindServiceInterface
                 'timeout' => 30 // 30 segundos timeout para autenticación
             ]);
             
-            $data = $response->toArray(false); // Obtiene el JSON, lanza error en HTTP no 2xx
             $statusCode = $response->getStatusCode();
+            $rawBody = $response->getContent(false);
+
+            if (empty(trim($rawBody))) {
+                throw new \RuntimeException("BIND Auth Error (HTTP {$statusCode}): La respuesta está vacía");
+            }
+
+            $data = json_decode($rawBody, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new \RuntimeException("BIND Auth Error (HTTP {$statusCode}): Respuesta no es JSON válido. Body: " . substr($rawBody, 0, 500));
+            }
             
             if (!isset($data['access_token'])) {
                  // Manejo de error si el body no contiene el token (ej. 400 Bad Request)
@@ -183,17 +201,29 @@ class BindService implements BindServiceInterface
         ]);
 
         $statusCode = $response->getStatusCode();
-        $data = $response->toArray(false);
+        $rawBody = $response->getContent(false);
+        
+        if (empty(trim($rawBody))) {
+            throw new \RuntimeException(
+                "BIND API Error (HTTP {$statusCode}): La respuesta está vacía. " .
+                "Payload enviado: " . json_encode($payload, JSON_UNESCAPED_UNICODE)
+            );
+        }
+
+        $data = json_decode($rawBody, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException(
+                "BIND API Error (HTTP {$statusCode}): Respuesta no es JSON válido. Body: " . substr($rawBody, 0, 500)
+            );
+        }
         
         if ($statusCode !== 201 && $statusCode !== 200) {
-            $rawError = $response->getContent(false);
-            $errorDetalle = $data['mensaje'] ?? $data['errores'][0]['detalle'] ?? $rawError;
-            // Aquí SI lanzamos excepción porque falló un intento REAL (o la API respondió mal)
-            throw new \RuntimeException("BIND API Error: " . $errorDetalle);
+            $errorDetalle = $data['mensaje'] ?? $data['errores'][0]['detalle'] ?? $rawBody;
+            throw new \RuntimeException("BIND API Error (HTTP {$statusCode}): " . $errorDetalle);
         }
         
         $data['audit_cvu_origen'] = $origenAUtilizar;
-        $data['estado'] = 'COMPLETED'; // Normalizamos el estado para facilitar chequeos
+        $data['estado'] = 'COMPLETED';
         return $data;
     }
 
@@ -205,6 +235,14 @@ class BindService implements BindServiceInterface
     {
         $token = $this->getAccessToken();
         $url = $this->apiUrl . self::MOVIMIENTOS_ENDPOINT;
+
+        // Agregar hora si solo viene la fecha (YYYY-MM-DD)
+        if (strlen($fechaDesde) === 10) {
+            $fechaDesde .= 'T00:00:00';
+        }
+        if (strlen($fechaHasta) === 10) {
+            $fechaHasta .= 'T23:59:59';
+        }
 
         $response = $this->httpClient->request('GET', $url, [
             'headers' => [
@@ -221,11 +259,27 @@ class BindService implements BindServiceInterface
         ]);
 
         $statusCode = $response->getStatusCode();
-        $data = $response->toArray(false);
+        $rawBody = $response->getContent(false);
+
+        if (empty(trim($rawBody))) {
+            // BIND devuelve body vacío cuando no hay movimientos en el rango
+            return [
+                'totalPages' => 0,
+                'totalRecords' => 0,
+                'movimientosOperaciones' => [],
+            ];
+        }
+
+        $data = json_decode($rawBody, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException(
+                "BIND Movimientos Error (HTTP {$statusCode}): Respuesta no es JSON válido. Body: " . substr($rawBody, 0, 500)
+            );
+        }
 
         if ($statusCode !== 200) {
             $errorMsg = $data['mensaje'] ?? json_encode($data);
-            throw new \RuntimeException("Error al consultar movimientos BIND: $errorMsg");
+            throw new \RuntimeException("Error al consultar movimientos BIND (HTTP {$statusCode}): $errorMsg");
         }
 
         return $data;
