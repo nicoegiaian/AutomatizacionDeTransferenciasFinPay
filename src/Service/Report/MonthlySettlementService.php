@@ -30,19 +30,19 @@ class MonthlySettlementService
         
         $sql = "
             SELECT
-            puntosdeventa.razonsocial as 'razon_social',
-            puntosdeventa.cuit,
-            puntosdeventa.comercio,
-            unidadesdenegocio.nombre as 'unidad_negocio', -- CAMPO NUEVO
-            Count(transacciones.nrotransaccion) as 'cantidad',
-            metodopago as 'metodopago',
-            SUM(importecheque) as 'venta',
-            SUM(comisionpd) as 'costo_servicio',
-            SUM(comisionprontopago + descuentocuotas) as 'costo_financiacion',
-            SUM(IFNULL(aranceltarjeta, 0)) as 'arancel_tarjeta',
-            SUM(ivacomisionpd + ivacomisionprontopago + ivadescuentocuotas + ivacostoacreditacion + ivaaranceltarjeta) as 'iva',
-            SUM(sirtac + otrosimpuestos) as 'otros_impuestos',
-            SUM(IFNULL(beneficiocredmoura, 0)) as 'beneficio_credmoura',
+            pdv.razonsocial as 'razon_social',
+            pdv.cuit,
+            pdv.comercio,
+            und.nombre as 'unidad_negocio', -- CAMPO NUEVO
+            Count(t.nrotransaccion) as 'cantidad',
+            t.metodopago as 'metodopago',
+            SUM(t.importecheque) as 'venta',
+            SUM(ld.comisionpd) as 'costo_servicio',
+            SUM(ld.comisionprontopago + ld.descuentocuotas) as 'costo_financiacion',
+            SUM(IFNULL(cac.aranceltarjeta, 0)) as 'arancel_tarjeta',
+            SUM(ld.ivacomisionpd + ld.ivacomisionprontopago + ld.ivadescuentocuotas + ld.ivacostoacreditacion + ld.ivaaranceltarjeta) as 'iva',
+            SUM(ld.sirtac + ld.otrosimpuestos) as 'otros_impuestos',
+            SUM(IFNULL(cac.beneficiocredmoura, 0)) as 'beneficio_credmoura',
             SUM(cac.totalneto) as 'total_neto',
             SUM(ROUND((
                 cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100
@@ -55,15 +55,15 @@ class MonthlySettlementService
             0 as 'IVA Subsidio Moura',
             0 as 'Transferencia Moura'
             FROM
-            transacciones
-            INNER JOIN calculos_ahorro_credmoura cac ON transacciones.nrotransaccion = cac.nrotransaccion
-            INNER JOIN liquidacionesdetalle ON transacciones.nrotransaccion = liquidacionesdetalle.nrotransaccion    
-            INNER JOIN puntosdeventa ON puntosdeventa.id = transacciones.idpdv
-            LEFT JOIN unidadesdenegocio ON puntosdeventa.idunidadnegocio = unidadesdenegocio.id -- JOIN NUEVO
+            transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
+            INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion    
+            INNER JOIN puntosdeventa pdv ON pdv.id = t.idpdv
+            LEFT JOIN unidadesdenegocio und ON pdv.idunidadnegocio = und.id -- JOIN NUEVO
             WHERE 
-            fechapagobind >= :startDate 
-            AND fechapagobind < DATE_ADD(:endDate, INTERVAL 1 DAY)
-            GROUP BY puntosdeventa.razonsocial, puntosdeventa.cuit, metodopago, unidadesdenegocio.nombre
+            t.fechapagobind >= :startDate 
+            AND t.fechapagobind < DATE_ADD(:endDate, INTERVAL 1 DAY)
+            GROUP BY pdv.razonsocial, pdv.cuit, t.metodopago, und.nombre
         ";
 
         $rows = $this->connection->executeQuery($sql, [
@@ -154,27 +154,27 @@ class MonthlySettlementService
         $sql = "
             SELECT
                 unidadesdenegocio.nombre as 'unidad_negocio',
-                SUM(IF(metodopago IN ('DE', 'PR'), 1, 0)) as cant_debito,
-                SUM(IF(metodopago IN ('DE', 'PR'), importecheque, 0)) as monto_debito,
-                SUM(IF(metodopago = 'CR', 1, 0)) as cant_credito,
-                SUM(IF(metodopago = 'CR', importecheque, 0)) as monto_credito,
-                SUM(IF(metodopago = 'QR', 1, 0)) as cant_qr,
-                SUM(IF(metodopago = 'QR', importecheque, 0)) as monto_qr,
-                SUM(IF(metodopago = 'PR', 1, 0)) as cant_prepago,
-                SUM(IF(metodopago = 'PR', importecheque, 0)) as monto_prepago,
-                COUNT(transacciones.nrotransaccion) as 'transacciones',
-                SUM(importecheque) as 'bruto',
+                SUM(IF(t.metodopago IN ('DE', 'PR'), 1, 0)) as cant_debito,
+                SUM(IF(t.metodopago IN ('DE', 'PR'), t.importecheque, 0)) as monto_debito,
+                SUM(IF(t.metodopago = 'CR', 1, 0)) as cant_credito,
+                SUM(IF(t.metodopago = 'CR', t.importecheque, 0)) as monto_credito,
+                SUM(IF(t.metodopago = 'QR', 1, 0)) as cant_qr,
+                SUM(IF(t.metodopago = 'QR', t.importecheque, 0)) as monto_qr,
+                SUM(IF(t.metodopago = 'PR', 1, 0)) as cant_prepago,
+                SUM(IF(t.metodopago = 'PR', t.importecheque, 0)) as monto_prepago,
+                COUNT(t.nrotransaccion) as 'transacciones',
+                SUM(t.importecheque) as 'bruto',
                 SUM(cac.totalneto) as 'neto_percibido',
                 SUM(ROUND((cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cuenta_comercio',
                 SUM(ROUND((cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', -1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cc_moura',
                 SUM(liquidacionesdetalle.subsidiomoura) as 'total_subsidio',
                 SUM(liquidacionesdetalle.ivasubsidiomoura) as 'total_iva_subsidio'
-            FROM transacciones
-            INNER JOIN calculos_ahorro_credmoura cac ON transacciones.nrotransaccion = cac.nrotransaccion
-            INNER JOIN liquidacionesdetalle ON transacciones.nrotransaccion = liquidacionesdetalle.nrotransaccion    
-            INNER JOIN puntosdeventa ON puntosdeventa.id = transacciones.idpdv
+            FROM transacciones t
+            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
+            INNER JOIN liquidacionesdetalle ON t.nrotransaccion = liquidacionesdetalle.nrotransaccion    
+            INNER JOIN puntosdeventa ON puntosdeventa.id = t.idpdv
             INNER JOIN unidadesdenegocio ON puntosdeventa.idunidadnegocio = unidadesdenegocio.id
-            WHERE fechapagobind >= :startDate AND fechapagobind < DATE_ADD(:endDate, INTERVAL 1 DAY)
+            WHERE t.fechapagobind >= :startDate AND t.fechapagobind < DATE_ADD(:endDate, INTERVAL 1 DAY)
             GROUP BY unidadesdenegocio.nombre
         ";
 
@@ -211,9 +211,9 @@ class MonthlySettlementService
             $transferenciaMoura = $row['en_cc_moura'] - ($row['total_subsidio'] + $row['total_iva_subsidio']);
             $bruto = (float)$row['bruto'];
 
-            $costoServicio = $bruto * 0.03;      
-            $iva = $costoServicio * 0.21;        
-            $beneficio = $bruto * 0.005;         
+            $costoServicio = $bruto * 0.03;
+            $iva = $costoServicio * 0.21;
+            $beneficio = $bruto * 0.005;
 
             $unitReport = [
                 'header' => [

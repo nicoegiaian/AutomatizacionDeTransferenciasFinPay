@@ -48,7 +48,18 @@ class TransferManager
     {
         // 0. Configuración inicial
         $estadoExito = $this->enableRealTransfer ? 'COMPLETED' : 'AUDIT_COMPLETED';
-        
+
+        // --- MUTEX: previene ejecuciones concurrentes ---
+        $lockFilePath = dirname($this->logFilePath) . '/transferencias.lock';
+        $lockHandle = fopen($lockFilePath, 'c');
+        if ($lockHandle === false) {
+            throw new \RuntimeException("No se pudo abrir el archivo de lock: $lockFilePath");
+        }
+        if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
+            fclose($lockHandle);
+            throw new \RuntimeException("El proceso de transferencias ya está en ejecución. Intente nuevamente en unos minutos.");
+        }
+
         if (file_exists($this->logFilePath)) {
             file_put_contents($this->logFilePath, '');
         }
@@ -96,6 +107,10 @@ class TransferManager
         try {
             // 2. Cálculo de Montos
             $data = $this->getPendingTransfersData($fechaSQL);
+            $contablesMarcadas = $this->markFabricanteAsAccountingAdvance($fechaSQL);
+            if ($contablesMarcadas > 0) {
+                $this->logger->info("🧾 Adelanto UN contable: {$contablesMarcadas} transacciones marcadas sin transferencia de dinero.");
+            }
             
             // Si no hay nada pendiente, devolvemos las transferencias ya completadas
             if ($data['total_monto'] <= 0) {
@@ -176,7 +191,8 @@ class TransferManager
                     $agrupadorPorUnidad[$nombreUnidad] = [
                         'nombre' => $nombreUnidad,
                         'moura' => null, 
-                        'pdvs' => []
+                        'pdvs' => [],
+                        'recupero_financiacion' => null,
                     ];
                 }
 
@@ -198,6 +214,8 @@ class TransferManager
                 $detallePdv = [
                     'razonsocial' => $razonSocial, 
                     'monto' => $pdv['monto'],
+                    'seguro_incobrabilidad_moura' => (float)($pdv['seguro_incobrabilidad_moura'] ?? 0),
+                    'iva_seguro_incobrabilidad_moura' => (float)($pdv['iva_seguro_incobrabilidad_moura'] ?? 0),
                     'monto_original' => $montoOriginal,
                     'descuentos_aplicados' => $descuentosAplicados['total_descontado'],
                     'cbu_destino' => $pdv['cbu'],
@@ -248,7 +266,8 @@ class TransferManager
                             $pdv['cbu'], 
                             $pdv['monto'], 
                             null, // Origen default
-                            $this->enableRealTransfer // <--- Flag local de TransferManager
+                            $this->enableRealTransfer, // <--- Flag local de TransferManager
+                            $pdv['cuit'] ?? null
                         );
                         $this->jsonLogger->info("RESPUESTA PDV ({$razonSocial}):", [
                             'monto' => $pdv['monto'],
@@ -261,7 +280,10 @@ class TransferManager
                             // --- CASO SIMULACIÓN ---
                             $this->logDetallado("SIMULACIÓN PDV-$razonSocial", "Payload simulado:\n" . json_encode($res['payload_debug'] ?? [], JSON_PRETTY_PRINT));
                             
-                            $this->updateTransactionStatus($pdv['transacciones_ids'], 'AUDIT_COMPLETED', 'MOCK-ID-' . time(), null, true);
+                            // No marcamos como procesada (procesada=0) para que el run real las encuentre
+                            $this->updateTransactionStatus($pdv['transacciones_ids'], 'AUDIT_COMPLETED', 'MOCK-ID-' . time(), null, false);
+                            // Revertir descuentos para que el run real los aplique (dry run no debe consumirlos)
+                            $this->revertirDescuentosLote($loteId, $idPdv, null, $descuentosAplicados['detalle'] ?? []);
                             $detallePdv['estado'] = 'SIMULADA (DRY RUN)';
                             
                         } else {
@@ -285,7 +307,7 @@ class TransferManager
                         $detallePdv['estado'] = 'ERROR: ' . $e->getMessage();
                         $this->logDetallado("ERROR API PDV-$razonSocial", $e->getMessage());
                         // Revertir descuentos para que se re-apliquen en el próximo intento
-                        $this->revertirDescuentosLote($loteId, $idPdv, null);
+                        $this->revertirDescuentosLote($loteId, $idPdv, null, $descuentosAplicados['detalle'] ?? []);
                     }
                 }
                 
@@ -339,13 +361,15 @@ class TransferManager
                     $agrupadorPorUnidad[$nombreUnidad] = [
                         'nombre' => $nombreUnidad,
                         'moura' => null,
-                        'pdvs' => []
+                        'pdvs' => [],
+                        'recupero_financiacion' => null,
                     ];
                 }
                 
                 $detalleFab = [
                     'monto' => $montoUnidad,
                     'monto_original' => $montoOriginalFab,
+                    'monto_recupero_financiacion' => (float)($unidad['monto_recupero_financiacion'] ?? 0),
                     'descuentos_aplicados' => $descuentosFab['total_descontado'],
                     'cbu_destino' => $cbuUnidad,
                     'estado' => 'PENDIENTE'
@@ -376,6 +400,11 @@ class TransferManager
                                     $coelsaIdExistente,
                                     'Ya transferido en BIND'
                                 );
+                                $this->updateFinancingInstallmentsStatus(
+                                    $unidad['cuota_ids_csv'] ?? '',
+                                    'Cobrada',
+                                    $fechaSQL
+                                );
                                 $detalleFab['estado'] = 'YA TRANSFERIDO (BIND)';
                                 $detalleMouraLog[$nombreUnidad] = 'OK';
                                 $agrupadorPorUnidad[$nombreUnidad]['moura'] = $detalleFab;
@@ -388,7 +417,8 @@ class TransferManager
                             $cbuUnidad, 
                             $montoUnidad,
                             null, // Origen por defecto
-                            $this->enableRealTransfer // <--- Flag local de TransferManager
+                            $this->enableRealTransfer, // <--- Flag local de TransferManager
+                            $unidad['cuit_unidad'] ?? null
                         );            
                         $this->jsonLogger->info("RESPUESTA FABRICANTE ({$nombreUnidad}):", [
                             'monto' => $montoUnidad,
@@ -399,15 +429,19 @@ class TransferManager
                         if (isset($resFab['estado']) && $resFab['estado'] === 'SIMULATED') {
                             // --- CASO SIMULADO ---
                             $simBindId = $resFab['comprobanteId'] ?? 'SIM-NO-ID';
+                            // No marcamos como procesada (procesada=0) para que el run real las encuentre
                             $this->updateFabricanteStatus(
                                 $unidad['transacciones_ids_csv'] ?? '',
                                 'SIMULADA',
                                 $simBindId,
                                 null,
-                                'Simulación DRY RUN'
+                                'Simulación DRY RUN',
+                                false
                             );
                             
                             $this->logDetallado("SIMULACIÓN FAB-$nombreUnidad", "Payload simulado:\n" . json_encode($resFab['payload_debug'] ?? [], JSON_PRETTY_PRINT));
+                            // Revertir descuentos para que el run real los aplique (dry run no debe consumirlos)
+                            $this->revertirDescuentosLote($loteId, null, $idUnidad, $descuentosFab['detalle'] ?? []);
                             $detalleFab['estado'] = 'SIMULADA (DRY RUN)';           
                             $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
                             
@@ -422,6 +456,11 @@ class TransferManager
                                 $coelsaIdFab,
                                 json_encode($resFab)
                             );
+                            $this->updateFinancingInstallmentsStatus(
+                                $unidad['cuota_ids_csv'] ?? '',
+                                'Cobrada',
+                                $fechaSQL
+                            );
                             
                             $this->logger->info("    -> OK Fab $nombreUnidad (ID: $bindId)");
                             
@@ -431,14 +470,18 @@ class TransferManager
                         }
 
                     } catch (\App\Exception\DryRunException $e) {
+                        // No marcamos como procesada (procesada=0) para que el run real las encuentre
                         $this->updateFabricanteStatus(
                             $unidad['transacciones_ids_csv'] ?? '',
                             'SIMULADA',
                             null,
                             null,
-                            'DryRun: ' . $e->getMessage()
+                            'DryRun: ' . $e->getMessage(),
+                            false
                         );
                         $this->logDetallado("SIMULACIÓN FAB-$nombreUnidad", $e->getMessage() . "\n" . $jsonLog);
+                        // Revertir descuentos para que el run real los aplique (dry run no debe consumirlos)
+                        $this->revertirDescuentosLote($loteId, null, $idUnidad, $descuentosFab['detalle'] ?? []);
                         $detalleFab['estado'] = 'SIMULADA (DRY RUN)';
                         $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
                     } catch (\Exception $e) {
@@ -453,11 +496,17 @@ class TransferManager
                         $detalleFab['estado'] = 'ERROR: ' . $e->getMessage();
                         $detalleMouraLog[$nombreUnidad] = 'ERROR_API: ' . $e->getMessage();
                         // Revertir descuentos para que se re-apliquen en el próximo intento
-                        $this->revertirDescuentosLote($loteId, null, $idUnidad);
+                        $this->revertirDescuentosLote($loteId, null, $idUnidad, $descuentosFab['detalle'] ?? []);
                     }
                 }
 
                 $agrupadorPorUnidad[$nombreUnidad]['moura'] = $detalleFab;
+                if (($detalleFab['monto_recupero_financiacion'] ?? 0) > 0) {
+                    $agrupadorPorUnidad[$nombreUnidad]['recupero_financiacion'] = [
+                        'monto' => $detalleFab['monto_recupero_financiacion'],
+                        'estado' => $detalleFab['estado'],
+                    ];
+                }
             }
 
             // Determinamos estado final de Moura
@@ -489,59 +538,90 @@ class TransferManager
             $this->closeLote($loteId, 'ERROR', 'ERROR'); 
             $this->notifier->sendFailureEmail("Error Fatal Liquidación $fechaLiquidacionDDMMAA", $e->getMessage(), $this->logFilePath);
             throw $e;
+        } finally {
+            // --- Liberar mutex ---
+            flock($lockHandle, LOCK_UN);
+            fclose($lockHandle);
         }
+
     }
 
     private function getPendingTransfersData(string $fechaSQL): array
     {
         // 1. PDV
         $queryPdv = "SELECT 
-                SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto_pdv,
+                SUM(ROUND((((cac.totalneto) * splits.porcentajepdv)/100), 2)) AS monto_pdv,
+            ROUND(SUM(IFNULL(cac.seguro_incobrabilidad_moura, 0)), 2) AS seguro_incobrabilidad_moura,
+            ROUND(SUM(IFNULL(cac.iva_seguro_incobrabilidad_moura, 0)), 2) AS iva_seguro_incobrabilidad_moura,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
             INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
+            INNER JOIN splits ON splits.idpdv = t.idpdv
+              AND splits.fecha = (
+                SELECT MAX(s2.fecha) FROM splits s2
+                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha
+                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+              )
             WHERE DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 0
         ";
         $dataPdv = $this->dbConnection->executeQuery($queryPdv, ['fecha' => $fechaSQL])->fetchAssociative();
 
-        // 2. FABRICANTE
-        $queryFab = "SELECT 
+                // 2. FABRICANTE (UN): en adelanto NO se transfiere dinero a UN.
+                // Se mantiene únicamente el flujo de recupero_financiacion.
+                $unidadesFabricante = [];
+
+        $queryRecuperoFinanciacion = "SELECT 
                 u.id as id_unidad,
                 u.nombre as nombre_unidad,
                 u.cbu as cbu_unidad,
-                GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv, 
-                ROUND(
-                    SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
-                    - 
-                    (
-                        SUM(t.importecheque) * (
-                            SELECT porcentaje 
-                            FROM porcentajes 
-                            WHERE nombre = 'Subsidio Moura' 
-                            AND fecha <= :fecha 
-                            ORDER BY fecha DESC 
-                            LIMIT 1
-                        ) / 100 * 1.21
-                    )
-                , 2) AS monto_calculado_old,
-                ROUND(
-                    SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
-                    - SUM(ld.subsidiomoura)
-                    - SUM(ld.ivasubsidiomoura)
-                , 2) AS monto_calculado
-            FROM transacciones t
-            INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
-            INNER JOIN puntosdeventa p ON t.idpdv = p.id
-            INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
-            INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
-            AND DATE(t.fechapagobind) = :fecha
-            AND t.transferencia_fabricante_procesada = 0  
-            GROUP BY u.id, u.nombre, u.cbu
-        ";
+                u.cuit as cuit_unidad,
+                GROUP_CONCAT(cf.id) AS cuota_ids_csv,
+                ROUND(SUM(cf.monto_neto_cuota), 2) AS monto_recupero_financiacion
+            FROM cuotas_financiacion cf
+            INNER JOIN financiacion_12cuotas f ON f.id = cf.id_financiacion
+            INNER JOIN unidadesdenegocio u ON u.id = cf.id_unidad_financiadora
+            WHERE cf.fecha_vencimiento = :fecha
+              AND cf.estado IN ('Pendiente', 'Vencida')
+              AND f.estado = 'Activo'
+            GROUP BY u.id, u.nombre, u.cbu, u.cuit";
+        $recuperosFinanciacion = $this->dbConnection
+            ->executeQuery($queryRecuperoFinanciacion, ['fecha' => $fechaSQL])
+            ->fetchAllAssociative();
 
-        $resultFab = $this->dbConnection->executeQuery($queryFab, ['fecha' => $fechaSQL]);
-        $unidadesFabricante = $resultFab->fetchAllAssociative();
+        $unidadesFabricanteMap = [];
+        foreach ($unidadesFabricante as $unidad) {
+            $key = (string)$unidad['id_unidad'];
+            $unidad['cuota_ids_csv'] = '';
+            $unidad['monto_recupero_financiacion'] = 0.0;
+            $unidadesFabricanteMap[$key] = $unidad;
+        }
+
+        foreach ($recuperosFinanciacion as $recupero) {
+            $key = (string)$recupero['id_unidad'];
+            if (!isset($unidadesFabricanteMap[$key])) {
+                $unidadesFabricanteMap[$key] = [
+                    'id_unidad' => $recupero['id_unidad'],
+                    'nombre_unidad' => $recupero['nombre_unidad'],
+                    'cbu_unidad' => $recupero['cbu_unidad'],
+                    'cuit_unidad' => $recupero['cuit_unidad'],
+                    'transacciones_ids_csv' => '',
+                    'monto_calculado' => 0.0,
+                    'cuota_ids_csv' => '',
+                    'monto_recupero_financiacion' => 0.0,
+                ];
+            }
+
+            $unidadesFabricanteMap[$key]['cuota_ids_csv'] = $recupero['cuota_ids_csv'] ?? '';
+            $unidadesFabricanteMap[$key]['monto_recupero_financiacion'] = (float)($recupero['monto_recupero_financiacion'] ?? 0);
+            $unidadesFabricanteMap[$key]['monto_calculado'] = round(
+                (float)$unidadesFabricanteMap[$key]['monto_calculado']
+                + (float)($recupero['monto_recupero_financiacion'] ?? 0),
+                2
+            );
+        }
+
+        $unidadesFabricante = array_values($unidadesFabricanteMap);
 
         $montoPdvTotal = (float) ($dataPdv['monto_pdv'] ?? 0);
 
@@ -568,6 +648,8 @@ class TransferManager
         return [
             'total_monto' => $montoPdvTotal + $montoFabTotal,
             'monto_pdv' => $montoPdvTotal,
+            'seguro_incobrabilidad_moura_pdv' => (float)($dataPdv['seguro_incobrabilidad_moura'] ?? 0),
+            'iva_seguro_incobrabilidad_moura_pdv' => (float)($dataPdv['iva_seguro_incobrabilidad_moura'] ?? 0),
             'monto_fabricante_total' => $montoFabTotal,
             'desglose_fabricante' => $unidadesFabricante,
             'transacciones_ids' => $transaccionIds, 
@@ -580,17 +662,26 @@ class TransferManager
                 p.id AS idpdv,
                 p.razonsocial,
                 p.cbu AS cbuDestino,
+                p.cuit AS cuitDestino,
                 u.nombre AS nombre_unidad,  
-                SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS total_monto,
+                SUM(ROUND((((cac.totalneto) * splits.porcentajepdv)/100), 2)) AS total_monto,
+            ROUND(SUM(IFNULL(cac.seguro_incobrabilidad_moura, 0)), 2) AS seguro_incobrabilidad_moura,
+            ROUND(SUM(IFNULL(cac.iva_seguro_incobrabilidad_moura, 0)), 2) AS iva_seguro_incobrabilidad_moura,
                 GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
             FROM transacciones t
             INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             JOIN puntosdeventa p ON t.idpdv = p.id
             JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id 
             LEFT JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
+            INNER JOIN splits ON splits.idpdv = t.idpdv
+              AND splits.fecha = (
+                SELECT MAX(s2.fecha) FROM splits s2
+                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha
+                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+              )
             WHERE DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 0
-            GROUP BY p.id, p.razonsocial, p.cbu, u.nombre 
+            GROUP BY p.id, p.razonsocial, p.cbu, p.cuit, u.nombre 
         ";
         
         $result = $this->dbConnection->executeQuery($query, ['fecha' => $fechaSQL]);
@@ -602,12 +693,32 @@ class TransferManager
                 'razonsocial' => $row['razonsocial'],
                 'nombre_unidad' => $row['nombre_unidad'],
                 'cbu' => $row['cbuDestino'],
+                'cuit' => $row['cuitDestino'],
                 'monto' => (float) $row['total_monto'],
+                'seguro_incobrabilidad_moura' => (float)($row['seguro_incobrabilidad_moura'] ?? 0),
+                'iva_seguro_incobrabilidad_moura' => (float)($row['iva_seguro_incobrabilidad_moura'] ?? 0),
                 'transacciones_ids' => array_map('intval', explode(',', $row['transacciones_ids_csv']))
             ];
         }
         
         return $transfers;
+    }
+
+    /**
+     * Marca como contabilizado el adelanto de UN sin realizar transferencia de dinero.
+     */
+    private function markFabricanteAsAccountingAdvance(string $fechaSQL): int
+    {
+        $sql = "UPDATE transacciones
+                SET transferencia_fabricante_procesada = 1,
+                    transferencia_fabricante_estado = 'CONTABLE_ADELANTO',
+                    fecha_transferencia_fabricante = NOW(),
+                                        respuesta_BIND_fabricante = 'Adelanto contable 12 cuotas: no se transfiere dinero a UN'
+                WHERE DATE(fechapagobind) = :fecha
+                                    AND CAST(canal AS UNSIGNED) = 12
+                  AND transferencia_fabricante_procesada = 0";
+
+        return $this->dbConnection->executeStatement($sql, ['fecha' => $fechaSQL]);
     }
     
     private function updateTransactionStatus(array $transaccionIds, string $estado, string $bindId, ?string $coelsaId = null, bool $marcarProcesada = true, ?string $respuestaBind = null): void
@@ -639,7 +750,7 @@ class TransferManager
         ]);
     }
 
-    private function updateFabricanteStatus(string $idsCsv, string $estado = 'COMPLETADA', ?string $bindId = null, ?string $coelsaId = null, ?string $respuestaBind = null): void
+    private function updateFabricanteStatus(string $idsCsv, string $estado = 'COMPLETADA', ?string $bindId = null, ?string $coelsaId = null, ?string $respuestaBind = null, bool $marcarProcesada = true): void
     {
         if (empty($idsCsv)) return;
         
@@ -648,9 +759,11 @@ class TransferManager
 
         if (empty($idsList)) return;
 
+        $procesadaInt = $marcarProcesada ? 1 : 0;
+
         $sql = "UPDATE transacciones 
             SET 
-                transferencia_fabricante_procesada = 1,
+                transferencia_fabricante_procesada = $procesadaInt,
                 transferencia_fabricante_estado = :estado,
                 transferencia_fabricante_id_bind = :bind_id,
                 coelsa_id_fabricante = :coelsa_id,
@@ -664,6 +777,65 @@ class TransferManager
             'coelsa_id' => $coelsaId,
             'respuesta' => $respuestaBind
         ]);
+    }
+
+    private function updateFinancingInstallmentsStatus(string $idsCsv, string $estado, string $fechaCobro): void
+    {
+        if (empty($idsCsv)) {
+            return;
+        }
+
+        $idsArray = array_filter(array_map('intval', explode(',', $idsCsv)));
+        if (empty($idsArray)) {
+            return;
+        }
+
+        $idsList = implode(',', $idsArray);
+        $sql = "UPDATE cuotas_financiacion
+                SET estado = :estado,
+                    fecha_cobro = :fecha_cobro,
+                    actualizado_en = NOW()
+                WHERE id IN ($idsList)";
+
+        $this->dbConnection->executeStatement($sql, [
+            'estado' => $estado,
+            'fecha_cobro' => $fechaCobro,
+        ]);
+
+        $this->syncFinancingHeadersByInstallments($idsArray);
+    }
+
+    private function syncFinancingHeadersByInstallments(array $installmentIds): void
+    {
+        if (empty($installmentIds)) {
+            return;
+        }
+
+        $idsList = implode(',', array_map('intval', $installmentIds));
+        $financiaciones = $this->dbConnection->fetchFirstColumn(
+            "SELECT DISTINCT id_financiacion FROM cuotas_financiacion WHERE id IN ($idsList)"
+        );
+
+        foreach ($financiaciones as $idFinanciacion) {
+            $resumen = $this->dbConnection->fetchAssociative(
+                "SELECT
+                        SUM(CASE WHEN estado = 'Cobrada' THEN 1 ELSE 0 END) AS cobradas,
+                        COUNT(*) AS total
+                   FROM cuotas_financiacion
+                  WHERE id_financiacion = :id",
+                ['id' => (int)$idFinanciacion]
+            );
+
+            $cobradas = (int)($resumen['cobradas'] ?? 0);
+            $total = (int)($resumen['total'] ?? 0);
+            $estadoCabecera = ($total > 0 && $cobradas >= $total) ? 'Completado' : 'Activo';
+
+            $this->dbConnection->update('financiacion_12cuotas', [
+                'cuotas_cobradas' => $cobradas,
+                'estado' => $estadoCabecera,
+                'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
+            ], ['id' => (int)$idFinanciacion]);
+        }
     }
 
     private function checkExistingLote(string $fechaSQL): ?array
@@ -683,13 +855,16 @@ class TransferManager
         $isCompleted = ($result['estado_actual_pdv'] === 'COMPLETED' && $result['estado_actual_moura'] === 'COMPLETED');
         
         // Verificamos si está en proceso o con errores parciales (retomable)
+        // AUDIT_COMPLETED = dry run ejecutado; el run real lo retoma y lo lleva a COMPLETED
         $isProcessing = (
             $result['estado_actual_pdv'] === 'PROCESSING' || 
             $result['estado_actual_moura'] === 'PROCESSING' ||
             $result['estado_actual_pdv'] === 'PARTIAL_ERROR' ||
             $result['estado_actual_moura'] === 'PARTIAL_ERROR' ||
             $result['estado_actual_pdv'] === 'ERROR' ||
-            $result['estado_actual_moura'] === 'ERROR'
+            $result['estado_actual_moura'] === 'ERROR' ||
+            $result['estado_actual_pdv'] === 'AUDIT_COMPLETED' ||
+            $result['estado_actual_moura'] === 'AUDIT_COMPLETED'
         );
         
         // Solo permitimos crear nuevo lote si está COMPLETADO totalmente
@@ -741,37 +916,72 @@ class TransferManager
         
         // 2. Obtener montos reales PDV (procesados)
         $sqlPdv = "SELECT 
-                COALESCE(SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)), 0) AS monto_pdv
+                COALESCE(SUM(ROUND((((cac.totalneto) * splits.porcentajepdv)/100), 2)), 0) AS monto_pdv
             FROM transacciones t
             INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
+            INNER JOIN splits ON splits.idpdv = t.idpdv
+              AND splits.fecha = (
+                SELECT MAX(s2.fecha) FROM splits s2
+                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha
+                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+              )
             WHERE DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 1";
         $dataPdv = $this->dbConnection->fetchAssociative($sqlPdv, ['fecha' => $fechaSQL]);
         $montoPdv = (float)($dataPdv['monto_pdv'] ?? 0);
         
-        // 3. Obtener montos y detalle reales Fabricante (procesados) por unidad
+        // 3. Obtener montos y detalle reales Fabricante (procesados) por unidad.
+        // Prioriza el campo precomputado en CAC y conserva fallback legacy para datos históricos.
         $sqlFab = "SELECT 
                 u.nombre as nombre_unidad,
-                ROUND(
-                    SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
-                    - SUM(ld.subsidiomoura) 
-                    - SUM(ld.ivasubsidiomoura)
-                , 2) AS monto_calculado
+                ROUND(SUM(IFNULL(cac.transferencia_moura_visible,
+                    (cac.totalneto * (100 - splits.porcentajepdv) / 100)
+                    - IFNULL(cac.comision_moura, 0)
+                    - GREATEST(0, IFNULL(cac.beneficiocredmoura, 0) - cac.importecheque * 0.002)
+                    - IFNULL(cac.aranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100
+                    - IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100
+                )), 2) AS monto_calculado
             FROM transacciones t
             INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
             INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
+            INNER JOIN splits ON splits.idpdv = t.idpdv
+              AND splits.fecha = (
+                SELECT MAX(s2.fecha) FROM splits s2 
+                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha 
+                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+              )
             WHERE DATE(t.fechapagobind) = :fecha
             AND t.transferencia_fabricante_procesada = 1
+            AND t.transferencia_fabricante_estado = 'COMPLETADA'
             GROUP BY u.id, u.nombre";
         $fabricantes = $this->dbConnection->executeQuery($sqlFab, ['fecha' => $fechaSQL])->fetchAllAssociative();
+
+        $sqlRecupero = "SELECT 
+                u.nombre as nombre_unidad,
+                ROUND(SUM(cf.monto_neto_cuota), 2) AS monto_calculado
+            FROM cuotas_financiacion cf
+            INNER JOIN financiacion_12cuotas f ON f.id = cf.id_financiacion
+            INNER JOIN unidadesdenegocio u ON u.id = cf.id_unidad_financiadora
+            WHERE cf.fecha_cobro = :fecha
+              AND cf.estado = 'Cobrada'
+              AND f.estado IN ('Activo', 'Completado')
+            GROUP BY u.id, u.nombre";
+        $recuperos = $this->dbConnection->executeQuery($sqlRecupero, ['fecha' => $fechaSQL])->fetchAllAssociative();
         
         $montoFab = 0.0;
         $detalleMoura = [];
         foreach ($fabricantes as $fab) {
             $montoFab += (float)$fab['monto_calculado'];
             $detalleMoura[$fab['nombre_unidad']] = 'OK';
+        }
+
+        foreach ($recuperos as $recupero) {
+            $nombreUnidad = $recupero['nombre_unidad'];
+            $montoRecupero = (float)($recupero['monto_calculado'] ?? 0);
+            $montoFab += $montoRecupero;
+            $detalleMoura[$nombreUnidad] = 'OK';
         }
         
         // 4. Actualizar el lote con datos completos
@@ -812,7 +1022,9 @@ class TransferManager
                 p.razonsocial,
                 u.nombre AS nombre_unidad,
                 p.cbu AS cbu_destino,
-                SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', 1) AS DECIMAL))/100), 2)) AS monto,
+                SUM(ROUND((((cac.totalneto) * splits.porcentajepdv)/100), 2)) AS monto,
+                ROUND(SUM(IFNULL(cac.seguro_incobrabilidad_moura, 0)), 2) AS seguro_incobrabilidad_moura,
+                ROUND(SUM(IFNULL(cac.iva_seguro_incobrabilidad_moura, 0)), 2) AS iva_seguro_incobrabilidad_moura,
                 t.transferencia_id_bind,
                 t.transferencia_estado,
                 t.fecha_transferencia
@@ -820,6 +1032,12 @@ class TransferManager
             INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             JOIN puntosdeventa p ON t.idpdv = p.id
             JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
+            INNER JOIN splits ON splits.idpdv = t.idpdv
+              AND splits.fecha = (
+                SELECT MAX(s2.fecha) FROM splits s2
+                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha
+                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+              )
             WHERE DATE(t.fechapagobind) = :fecha 
             AND t.transferencia_procesada = 1
             GROUP BY p.id, p.razonsocial, u.nombre, p.cbu, t.transferencia_id_bind, t.transferencia_estado, t.fecha_transferencia
@@ -834,7 +1052,8 @@ class TransferManager
                 $agrupadorPorUnidad[$nombreUnidad] = [
                     'nombre' => $nombreUnidad,
                     'moura' => null,
-                    'pdvs' => []
+                    'pdvs' => [],
+                    'recupero_financiacion' => null,
                 ];
             }
 
@@ -844,6 +1063,8 @@ class TransferManager
             $agrupadorPorUnidad[$nombreUnidad]['pdvs'][] = [
                 'razonsocial' => $pdv['razonsocial'],
                 'monto' => $monto,
+                'seguro_incobrabilidad_moura' => (float)($pdv['seguro_incobrabilidad_moura'] ?? 0),
+                'iva_seguro_incobrabilidad_moura' => (float)($pdv['iva_seguro_incobrabilidad_moura'] ?? 0),
                 'cbu_destino' => $pdv['cbu_destino'],
                 'estado' => $estado,
                 'bind_id' => $pdv['transferencia_id_bind'],
@@ -851,28 +1072,85 @@ class TransferManager
             ];
         }
 
-        // 2. Consultar Fabricante completado por unidad
+        // 2. Consultar Fabricante completado por unidad.
+        // Prioriza el campo precomputado en CAC y conserva fallback legacy para datos históricos.
         $queryFabCompleto = "
             SELECT 
                 u.id as id_unidad,
                 u.nombre as nombre_unidad,
                 u.cbu as cbu_unidad,
-                ROUND(
-                    SUM(ROUND((((cac.totalneto) * CAST(SUBSTRING_INDEX(t.estadocheque, '-', -1) AS DECIMAL))/100), 2))
-                    - SUM(ld.subsidiomoura) 
-                    - SUM(ld.ivasubsidiomoura)
-                , 2) AS monto_calculado
+                ROUND(SUM(IFNULL(cac.transferencia_moura_visible,
+                    (cac.totalneto * (100 - splits.porcentajepdv) / 100)
+                    - IFNULL(cac.comision_moura, 0)
+                    - GREATEST(0, IFNULL(cac.beneficiocredmoura, 0) - cac.importecheque * 0.002)
+                    - IFNULL(cac.aranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100
+                    - IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100
+                )), 2) AS monto_calculado,
+                ROUND(SUM(IFNULL(cac.seguro_incobrabilidad_moura, 0)), 2) AS seguro_incobrabilidad_moura,
+                ROUND(SUM(IFNULL(cac.iva_seguro_incobrabilidad_moura, 0)), 2) AS iva_seguro_incobrabilidad_moura
             FROM transacciones t
             INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             INNER JOIN puntosdeventa p ON t.idpdv = p.id
             INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
             INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
+            INNER JOIN splits ON splits.idpdv = t.idpdv
+              AND splits.fecha = (
+                SELECT MAX(s2.fecha) FROM splits s2 
+                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha 
+                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+              )
             WHERE DATE(t.fechapagobind) = :fecha
             AND t.transferencia_fabricante_procesada = 1
+            AND t.transferencia_fabricante_estado = 'COMPLETADA'
             GROUP BY u.id, u.nombre, u.cbu
         ";
 
         $fabricantesCompletados = $this->dbConnection->executeQuery($queryFabCompleto, ['fecha' => $fechaSQL])->fetchAllAssociative();
+
+        $queryRecuperoCompleto = "
+            SELECT 
+                u.id as id_unidad,
+                u.nombre as nombre_unidad,
+                u.cbu as cbu_unidad,
+                ROUND(SUM(cf.monto_neto_cuota), 2) AS monto_recupero_financiacion
+            FROM cuotas_financiacion cf
+            INNER JOIN financiacion_12cuotas f ON f.id = cf.id_financiacion
+            INNER JOIN unidadesdenegocio u ON u.id = cf.id_unidad_financiadora
+            WHERE cf.fecha_cobro = :fecha
+              AND cf.estado = 'Cobrada'
+              AND f.estado IN ('Activo', 'Completado')
+            GROUP BY u.id, u.nombre, u.cbu
+        ";
+        $recuperosCompletados = $this->dbConnection->executeQuery($queryRecuperoCompleto, ['fecha' => $fechaSQL])->fetchAllAssociative();
+
+        $fabricantesMap = [];
+        foreach ($fabricantesCompletados as $fab) {
+            $key = (string)$fab['id_unidad'];
+            $fab['monto_recupero_financiacion'] = 0.0;
+            $fabricantesMap[$key] = $fab;
+        }
+
+        foreach ($recuperosCompletados as $recupero) {
+            $key = (string)$recupero['id_unidad'];
+            if (!isset($fabricantesMap[$key])) {
+                $fabricantesMap[$key] = [
+                    'id_unidad' => $recupero['id_unidad'],
+                    'nombre_unidad' => $recupero['nombre_unidad'],
+                    'cbu_unidad' => $recupero['cbu_unidad'],
+                    'monto_calculado' => 0.0,
+                    'monto_recupero_financiacion' => 0.0,
+                ];
+            }
+
+            $fabricantesMap[$key]['monto_recupero_financiacion'] = (float)($recupero['monto_recupero_financiacion'] ?? 0);
+            $fabricantesMap[$key]['monto_calculado'] = round(
+                (float)$fabricantesMap[$key]['monto_calculado']
+                + (float)($recupero['monto_recupero_financiacion'] ?? 0),
+                2
+            );
+        }
+
+        $fabricantesCompletados = array_values($fabricantesMap);
 
         foreach ($fabricantesCompletados as $fab) {
             $nombreUnidad = $fab['nombre_unidad'];
@@ -881,7 +1159,8 @@ class TransferManager
                 $agrupadorPorUnidad[$nombreUnidad] = [
                     'nombre' => $nombreUnidad,
                     'moura' => null,
-                    'pdvs' => []
+                    'pdvs' => [],
+                    'recupero_financiacion' => null,
                 ];
             }
 
@@ -889,9 +1168,18 @@ class TransferManager
             
             $agrupadorPorUnidad[$nombreUnidad]['moura'] = [
                 'monto' => $monto,
+                'seguro_incobrabilidad_moura' => (float)($fab['seguro_incobrabilidad_moura'] ?? 0),
+                'iva_seguro_incobrabilidad_moura' => (float)($fab['iva_seguro_incobrabilidad_moura'] ?? 0),
                 'cbu_destino' => $fab['cbu_unidad'],
                 'estado' => $monto > 0 ? 'COMPLETADA' : 'OMITIDA (Sin saldo)'
             ];
+
+            if ((float)($fab['monto_recupero_financiacion'] ?? 0) > 0) {
+                $agrupadorPorUnidad[$nombreUnidad]['recupero_financiacion'] = [
+                    'monto' => (float)$fab['monto_recupero_financiacion'],
+                    'estado' => $monto > 0 ? 'COMPLETADA' : 'OMITIDA (Sin saldo)'
+                ];
+            }
         }
 
         return [
@@ -916,7 +1204,7 @@ class TransferManager
     private function aplicarDescuentosPdv(int $idPdv, float $monto, int $loteId): array
     {
         $descuentos = $this->dbConnection->fetchAllAssociative(
-            "SELECT id, monto FROM descuentos_transferencias WHERE idpdv = :idpdv AND estado = 'Pendiente' AND borrado_en IS NULL ORDER BY creado_en ASC",
+            "SELECT id, monto, COALESCE(monto_descontado, 0) AS monto_descontado FROM descuentos_transferencias WHERE idpdv = :idpdv AND estado = 'Pendiente' AND borrado_en IS NULL ORDER BY creado_en ASC",
             ['idpdv' => $idPdv]
         );
 
@@ -929,7 +1217,7 @@ class TransferManager
     private function aplicarDescuentosUnidad(int $idUnidad, float $monto, int $loteId): array
     {
         $descuentos = $this->dbConnection->fetchAllAssociative(
-            "SELECT id, monto FROM descuentos_transferencias WHERE id_unidad_negocio = :idUnidad AND estado = 'Pendiente' AND borrado_en IS NULL ORDER BY creado_en ASC",
+            "SELECT id, monto, COALESCE(monto_descontado, 0) AS monto_descontado FROM descuentos_transferencias WHERE id_unidad_negocio = :idUnidad AND estado = 'Pendiente' AND borrado_en IS NULL ORDER BY creado_en ASC",
             ['idUnidad' => $idUnidad]
         );
 
@@ -945,74 +1233,106 @@ class TransferManager
         $montoFinal = $montoOriginal;
         $totalDescontado = 0.0;
         $detalle = [];
+        $now = (new \DateTime())->format('Y-m-d H:i:s');
 
         foreach ($descuentos as $desc) {
             if ($montoFinal <= 0) break;
 
-            $montoDescuento = (float)$desc['monto'];
-            $aplicar = min($montoDescuento, $montoFinal);
-            
-            $montoFinal -= $aplicar;
-            $totalDescontado += $aplicar;
-            
-            // Marcar como descontado en BD
-            if ($aplicar < $montoDescuento) {
-                // Descuento parcial: reducir el monto al remanente y dejarlo Pendiente
-                $remanente = round($montoDescuento - $aplicar, 2);
-                $this->dbConnection->update('descuentos_transferencias', [
-                    'monto' => $remanente,
-                    'monto_descontado' => $aplicar,
-                    'lote_liquidacion_id' => $loteId,
-                    'fecha_descuento' => (new \DateTime())->format('Y-m-d H:i:s'),
-                    'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
-                ], ['id' => $desc['id']]);
-            } else {
-                // Descuento completo
-                $this->dbConnection->update('descuentos_transferencias', [
-                    'estado' => 'Descontado',
-                    'monto_descontado' => $aplicar,
-                    'lote_liquidacion_id' => $loteId,
-                    'fecha_descuento' => (new \DateTime())->format('Y-m-d H:i:s'),
-                    'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
-                ], ['id' => $desc['id']]);
+            $montoOriginalDesc = (float)$desc['monto'];                  // INMUTABLE: importe original del descuento
+            $yaDescontadoPrev  = (float)($desc['monto_descontado'] ?? 0); // acumulado de aplicaciones previas
+            $remanente = round($montoOriginalDesc - $yaDescontadoPrev, 2);
+            if ($remanente <= 0) continue;
+
+            $aplicar = min($remanente, $montoFinal);
+            $aplicar = round($aplicar, 2);
+            if ($aplicar <= 0) continue;
+
+            $montoFinal       = round($montoFinal - $aplicar, 2);
+            $totalDescontado  = round($totalDescontado + $aplicar, 2);
+            $nuevoAcumulado   = round($yaDescontadoPrev + $aplicar, 2);
+            $cubreTotal       = $nuevoAcumulado >= $montoOriginalDesc - 0.005;
+
+            // IMPORTANTE: NO mutamos `monto` (queda como valor original).
+            // Acumulamos `monto_descontado` y marcamos 'Descontado' sólo cuando se cubre el total.
+            $update = [
+                'monto_descontado'    => $nuevoAcumulado,
+                'lote_liquidacion_id' => $loteId,
+                'fecha_descuento'     => $now,
+                'actualizado_en'      => $now,
+            ];
+            if ($cubreTotal) {
+                $update['estado'] = 'Descontado';
             }
+            $this->dbConnection->update('descuentos_transferencias', $update, ['id' => $desc['id']]);
 
             $detalle[] = [
-                'descuento_id' => $desc['id'],
-                'monto_descuento' => $montoDescuento,
-                'monto_aplicado' => $aplicar,
-                'remanente' => $aplicar < $montoDescuento ? round($montoDescuento - $aplicar, 2) : 0,
+                'descuento_id'      => (int)$desc['id'],
+                'monto_descuento'   => $montoOriginalDesc,
+                'ya_descontado_prev'=> $yaDescontadoPrev,
+                'monto_aplicado'    => $aplicar,         // aplicado EN ESTE LOTE (necesario para revertir)
+                'acumulado_total'   => $nuevoAcumulado,
+                'remanente'         => $cubreTotal ? 0.0 : round($montoOriginalDesc - $nuevoAcumulado, 2),
+                'cubre_total'       => $cubreTotal,
             ];
         }
 
         return [
-            'monto_final' => round($montoFinal, 2),
-            'total_descontado' => round($totalDescontado, 2),
-            'detalle' => $detalle,
+            'monto_final'     => round($montoFinal, 2),
+            'total_descontado'=> $totalDescontado,
+            'detalle'         => $detalle,
         ];
     }
 
     /**
-     * Revierte descuentos marcados como 'Descontado' para un lote+PDV o lote+Unidad.
-     * Se usa cuando la transferencia falla para que el próximo intento los re-aplique.
+     * Revierte los descuentos aplicados en este lote (parciales o totales).
+     * Decrementa `monto_descontado` exactamente por el `monto_aplicado` registrado en el detalle
+     * y restaura el estado a 'Pendiente'. Se usa cuando la transferencia falla.
+     *
+     * @param array $detalle Array devuelto por procesarDescuentos()['detalle'].
      */
-    private function revertirDescuentosLote(int $loteId, ?int $idPdv, ?int $idUnidad): void
+    private function revertirDescuentosLote(int $loteId, ?int $idPdv, ?int $idUnidad, array $detalle = []): void
     {
-        $where = ['lote_liquidacion_id' => $loteId, 'estado' => 'Descontado'];
-        if ($idPdv !== null) {
-            $where['idpdv'] = $idPdv;
-        }
-        if ($idUnidad !== null) {
-            $where['id_unidad_negocio'] = $idUnidad;
+        if (empty($detalle)) {
+            // Fallback: sin detalle no podemos revertir parciales con precisión.
+            // Sólo revertimos los marcados 'Descontado' restando el monto original.
+            $where = ['lote_liquidacion_id' => $loteId, 'estado' => 'Descontado'];
+            if ($idPdv !== null)    $where['idpdv'] = $idPdv;
+            if ($idUnidad !== null) $where['id_unidad_negocio'] = $idUnidad;
+            $rows = $this->dbConnection->fetchAllAssociative(
+                "SELECT id, monto, COALESCE(monto_descontado,0) AS monto_descontado
+                 FROM descuentos_transferencias
+                 WHERE " . implode(' AND ', array_map(fn($k)=>"$k = :$k", array_keys($where))),
+                $where
+            );
+            foreach ($rows as $r) {
+                $nuevo = max(0.0, round((float)$r['monto_descontado'] - (float)$r['monto'], 2));
+                $this->dbConnection->update('descuentos_transferencias', [
+                    'estado'              => 'Pendiente',
+                    'monto_descontado'    => $nuevo > 0 ? $nuevo : null,
+                    'lote_liquidacion_id' => null,
+                    'fecha_descuento'     => null,
+                    'actualizado_en'      => (new \DateTime())->format('Y-m-d H:i:s'),
+                ], ['id' => $r['id']]);
+            }
+            return;
         }
 
-        $this->dbConnection->update('descuentos_transferencias', [
-            'estado' => 'Pendiente',
-            'monto_descontado' => null,
-            'lote_liquidacion_id' => null,
-            'fecha_descuento' => null,
-            'actualizado_en' => (new \DateTime())->format('Y-m-d H:i:s'),
-        ], $where);
+        $now = (new \DateTime())->format('Y-m-d H:i:s');
+        foreach ($detalle as $d) {
+            $row = $this->dbConnection->fetchAssociative(
+                "SELECT COALESCE(monto_descontado,0) AS monto_descontado FROM descuentos_transferencias WHERE id = :id",
+                ['id' => $d['descuento_id']]
+            );
+            if (!$row) continue;
+            $nuevo = max(0.0, round((float)$row['monto_descontado'] - (float)$d['monto_aplicado'], 2));
+            $this->dbConnection->update('descuentos_transferencias', [
+                'estado'              => 'Pendiente',
+                'monto_descontado'    => $nuevo > 0 ? $nuevo : null,
+                'lote_liquidacion_id' => null,
+                'fecha_descuento'     => null,
+                'actualizado_en'      => $now,
+            ], ['id' => $d['descuento_id']]);
+        }
     }
 
     // Código comentado de DEBIN omitido intencionalmente

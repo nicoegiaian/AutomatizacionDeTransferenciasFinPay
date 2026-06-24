@@ -12,6 +12,8 @@ services:
 
     App\:
         resource: '../src/'
+        exclude:
+            - '../src/PagoMisCuentas/'
 
     App\EventSubscriber\JwtTokenSubscriber:
         arguments:

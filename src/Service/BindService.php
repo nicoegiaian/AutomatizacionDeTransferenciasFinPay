@@ -162,15 +162,25 @@ class BindService implements BindServiceInterface
      * Realiza la transferencia o Simula según $isRealTransfer.
      * @param bool $isRealTransfer Si es FALSE, simula y devuelve array con estado 'SIMULATED'.
      */
-    public function transferToThirdParty(string $cbuDestino, float $monto, ?string $cvuOrigen = null, bool $isRealTransfer = false): array
+    public function transferToThirdParty(string $cbuDestino, float $monto, ?string $cvuOrigen = null, bool $isRealTransfer = false, ?string $cuitDestino = null): array
     {
         $token = $this->getAccessToken(); 
         $origenAUtilizar = $cvuOrigen ?? $this->cvuOrigen;
         $referencia = 'TRF-' . time() . '-' . rand(1000, 9999);
 
+        // cuit_destino es obligatorio desde 28/04/2026 (BIND changelog).
+        // Sanitizamos: solo dígitos, entre 10 y 11 chars (CUIT/CUIL AR).
+        $cuitSanitizado = $cuitDestino !== null ? preg_replace('/\D+/', '', $cuitDestino) : '';
+        if ($cuitSanitizado === '' || strlen($cuitSanitizado) < 10 || strlen($cuitSanitizado) > 11) {
+            throw new \RuntimeException(
+                "BIND transferToThirdParty: cuit_destino requerido y debe tener 10-11 dígitos. Recibido: " . var_export($cuitDestino, true) . " (CBU destino: $cbuDestino)"
+            );
+        }
+
         $payload = [
             'cvu_Origen' => $origenAUtilizar, 
             'cbu_cvu_destino' => $cbuDestino,
+            'cuit_destino' => $cuitSanitizado,
             'importe' => $monto,
             'referencia' => $referencia,
             'concepto' => 'VAR',
