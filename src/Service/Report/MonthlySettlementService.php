@@ -27,6 +27,16 @@ class MonthlySettlementService
             9 => 'Septiembre', 10 => 'Octubre', 11 => 'Noviembre', 12 => 'Diciembre'
         ];
         $periodoTexto = $nombresMeses[$month] . ' ' . $year;
+
+        $metodoPagoNormSql = "
+            CASE
+                WHEN UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, ''))) IN ('DE', 'DEBITO', 'DÉBITO') THEN 'DE'
+                WHEN UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, ''))) IN ('CR', 'CREDITO', 'CRÉDITO') THEN 'CR'
+                WHEN UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, ''))) IN ('QR') THEN 'QR'
+                WHEN UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, ''))) IN ('PR', 'PREPAGO', 'PREPAGA') THEN 'PR'
+                ELSE UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, '')))
+            END
+        ";
         
         $sql = "
             SELECT
@@ -35,14 +45,21 @@ class MonthlySettlementService
             pdv.comercio,
             und.nombre as 'unidad_negocio', -- CAMPO NUEVO
             Count(t.nrotransaccion) as 'cantidad',
-            t.metodopago as 'metodopago',
+            {$metodoPagoNormSql} as 'metodopago',
             SUM(t.importecheque) as 'venta',
-            SUM(ld.comisionpd) as 'costo_servicio',
-            SUM(ld.comisionprontopago + ld.descuentocuotas) as 'costo_financiacion',
-            SUM(IFNULL(cac.aranceltarjeta, 0)) as 'arancel_tarjeta',
-            SUM(ld.ivacomisionpd + ld.ivacomisionprontopago + ld.ivadescuentocuotas + ld.ivacostoacreditacion + ld.ivaaranceltarjeta) as 'iva',
-            SUM(ld.sirtac + ld.otrosimpuestos) as 'otros_impuestos',
-            SUM(IFNULL(cac.beneficiocredmoura, 0)) as 'beneficio_credmoura',
+            SUM(IFNULL(ld.comisionpd, 0)) as 'costo_servicio',
+            SUM(IFNULL(cac.costofinanciero, 0)) as 'costo_financiacion',
+            SUM((IFNULL(cac.aranceltarjeta, 0) + IFNULL(t.importecheque, 0) * 0.002) * (1 - IFNULL(cac.pct_financiacion_arancel, 0) / 100)) as 'arancel_tarjeta',
+            SUM(IFNULL(cac.iva_total,
+                IFNULL(ld.ivacomisionpd, 0)
+                + IFNULL(ld.ivacomisionprontopago, 0)
+                + IFNULL(ld.ivadescuentocuotas, 0)
+                + IFNULL(ld.ivacostoacreditacion, 0)
+                + IFNULL(ld.ivaaranceltarjeta, 0)
+                + IFNULL(ld.IVAcostomipyme, 0)
+            ) - LEAST(IFNULL(cac.iva_arancel, 0), IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)) as 'iva',
+            SUM(IFNULL(cac.otros_impuestos, IFNULL(ld.sirtac, 0) + IFNULL(ld.otrosimpuestos, 0))) as 'otros_impuestos',
+            SUM(GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)) as 'beneficio_credmoura',
             SUM(cac.totalneto) as 'total_neto',
             SUM(ROUND((
                 cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100
@@ -59,11 +76,17 @@ class MonthlySettlementService
             INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
             INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion    
             INNER JOIN puntosdeventa pdv ON pdv.id = t.idpdv
+                        INNER JOIN splits ON splits.idpdv = t.idpdv
+                            AND splits.fecha = (
+                                SELECT MAX(s2.fecha) FROM splits s2
+                                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha
+                                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+                            )
             LEFT JOIN unidadesdenegocio und ON pdv.idunidadnegocio = und.id -- JOIN NUEVO
             WHERE 
             t.fechapagobind >= :startDate 
             AND t.fechapagobind < DATE_ADD(:endDate, INTERVAL 1 DAY)
-            GROUP BY pdv.razonsocial, pdv.cuit, t.metodopago, und.nombre
+            GROUP BY pdv.razonsocial, pdv.cuit, {$metodoPagoNormSql}, und.nombre
         ";
 
         $rows = $this->connection->executeQuery($sql, [
@@ -151,29 +174,85 @@ class MonthlySettlementService
         ];
         $periodoTexto = $nombresMeses[$month] . ' ' . $year;
 
+        $metodoPagoNormSql = "
+            CASE
+                WHEN UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, ''))) IN ('DE', 'DEBITO', 'DÉBITO') THEN 'DE'
+                WHEN UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, ''))) IN ('CR', 'CREDITO', 'CRÉDITO') THEN 'CR'
+                WHEN UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, ''))) IN ('QR') THEN 'QR'
+                WHEN UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, ''))) IN ('PR', 'PREPAGO', 'PREPAGA') THEN 'PR'
+                ELSE UPPER(TRIM(COALESCE(NULLIF(t.metodopagoOriginal, ''), t.metodopago, '')))
+            END
+        ";
+
         $sql = "
             SELECT
                 unidadesdenegocio.nombre as 'unidad_negocio',
-                SUM(IF(t.metodopago IN ('DE', 'PR'), 1, 0)) as cant_debito,
-                SUM(IF(t.metodopago IN ('DE', 'PR'), t.importecheque, 0)) as monto_debito,
-                SUM(IF(t.metodopago = 'CR', 1, 0)) as cant_credito,
-                SUM(IF(t.metodopago = 'CR', t.importecheque, 0)) as monto_credito,
-                SUM(IF(t.metodopago = 'QR', 1, 0)) as cant_qr,
-                SUM(IF(t.metodopago = 'QR', t.importecheque, 0)) as monto_qr,
-                SUM(IF(t.metodopago = 'PR', 1, 0)) as cant_prepago,
-                SUM(IF(t.metodopago = 'PR', t.importecheque, 0)) as monto_prepago,
+                SUM(IF({$metodoPagoNormSql} IN ('DE', 'PR'), 1, 0)) as cant_debito,
+                SUM(IF({$metodoPagoNormSql} IN ('DE', 'PR'), t.importecheque, 0)) as monto_debito,
+                SUM(IF({$metodoPagoNormSql} = 'CR', 1, 0)) as cant_credito,
+                SUM(IF({$metodoPagoNormSql} = 'CR', t.importecheque, 0)) as monto_credito,
+                SUM(IF({$metodoPagoNormSql} = 'QR', 1, 0)) as cant_qr,
+                SUM(IF({$metodoPagoNormSql} = 'QR', t.importecheque, 0)) as monto_qr,
+                SUM(IF({$metodoPagoNormSql} = 'PR', 1, 0)) as cant_prepago,
+                SUM(IF({$metodoPagoNormSql} = 'PR', t.importecheque, 0)) as monto_prepago,
                 COUNT(t.nrotransaccion) as 'transacciones',
                 SUM(t.importecheque) as 'bruto',
+                SUM(IFNULL(ld.comisionpd, 0)) as 'costo_servicio',
+                SUM(IFNULL(cac.iva_total,
+                    IFNULL(ld.ivacomisionpd, 0)
+                    + IFNULL(ld.ivacomisionprontopago, 0)
+                    + IFNULL(ld.ivadescuentocuotas, 0)
+                    + IFNULL(ld.ivacostoacreditacion, 0)
+                    + IFNULL(ld.ivaaranceltarjeta, 0)
+                    + IFNULL(ld.IVAcostomipyme, 0)
+                ) - LEAST(IFNULL(cac.iva_arancel, 0), IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)) as 'iva',
+                SUM(GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)) as 'beneficio_credmoura',
                 SUM(cac.totalneto) as 'neto_percibido',
                 SUM(ROUND((cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cuenta_comercio',
                 SUM(ROUND((cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', -1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cc_moura',
-                SUM(liquidacionesdetalle.subsidiomoura) as 'total_subsidio',
-                SUM(liquidacionesdetalle.ivasubsidiomoura) as 'total_iva_subsidio'
+                SUM(CASE
+                    WHEN CAST(IFNULL(t.Canal, 0) AS UNSIGNED) = 12
+                    THEN (IFNULL(cac.comision_moura, 0) / 1.21)
+                        + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)
+                    WHEN IFNULL(cac.comision_moura_sin_iva, 0) = 0 AND IFNULL(cac.comision_moura, 0) = 0
+                    THEN IFNULL(ld.subsidiomoura, 0)
+                    ELSE (IFNULL(cac.comision_moura, 0) / 1.21)
+                        + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)
+                END) as 'total_subsidio',
+                SUM(CASE
+                    WHEN IFNULL(cac.comision_moura_sin_iva, 0) = 0 AND IFNULL(cac.comision_moura, 0) = 0
+                    THEN IFNULL(ld.ivasubsidiomoura, 0)
+                    ELSE (IFNULL(cac.comision_moura, 0) / 1.21) * 0.21
+                END) as 'total_iva_subsidio',
+                SUM(IFNULL(cac.aranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100) as 'arancel_tarjeta_moura',
+                SUM(LEAST(IFNULL(cac.iva_arancel, 0), IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)) as 'iva_arancel_moura',
+                SUM(
+                    (IFNULL(cac.totalneto, 0) * (100 - splits.porcentajepdv) / 100)
+                    - (CASE
+                        WHEN CAST(IFNULL(t.Canal, 0) AS UNSIGNED) = 12
+                        THEN (IFNULL(cac.comision_moura, 0) / 1.21)
+                            + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)
+                            + ((IFNULL(cac.comision_moura, 0) / 1.21) * 0.21)
+                        WHEN IFNULL(cac.comision_moura, 0) = 0
+                        THEN IFNULL(ld.ivasubsidiomoura, 0) + IFNULL(ld.subsidiomoura, 0)
+                        ELSE (IFNULL(cac.comision_moura, 0) / 1.21)
+                            + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)
+                            + ((IFNULL(cac.comision_moura, 0) / 1.21) * 0.21)
+                    END)
+                    - (IFNULL(cac.aranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)
+                    - LEAST(IFNULL(cac.iva_arancel, 0), IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)
+                ) as 'transferencia_moura'
             FROM transacciones t
             INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
-            INNER JOIN liquidacionesdetalle ON t.nrotransaccion = liquidacionesdetalle.nrotransaccion    
+            INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion    
             INNER JOIN puntosdeventa ON puntosdeventa.id = t.idpdv
             INNER JOIN unidadesdenegocio ON puntosdeventa.idunidadnegocio = unidadesdenegocio.id
+            INNER JOIN splits ON splits.idpdv = t.idpdv
+              AND splits.fecha = (
+                SELECT MAX(s2.fecha) FROM splits s2
+                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha
+                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+              )
             WHERE t.fechapagobind >= :startDate AND t.fechapagobind < DATE_ADD(:endDate, INTERVAL 1 DAY)
             GROUP BY unidadesdenegocio.nombre
         ";
@@ -208,12 +287,11 @@ class MonthlySettlementService
         ];
 
         foreach ($rows as $row) {
-            $transferenciaMoura = $row['en_cc_moura'] - ($row['total_subsidio'] + $row['total_iva_subsidio']);
+            $transferenciaMoura = (float)($row['transferencia_moura'] ?? 0);
             $bruto = (float)$row['bruto'];
-
-            $costoServicio = $bruto * 0.03;
-            $iva = $costoServicio * 0.21;
-            $beneficio = $bruto * 0.005;
+            $costoServicio = (float)($row['costo_servicio'] ?? 0);
+            $iva = (float)($row['iva'] ?? 0);
+            $beneficio = (float)($row['beneficio_credmoura'] ?? 0);
 
             $unitReport = [
                 'header' => [
@@ -257,11 +335,6 @@ class MonthlySettlementService
             $global['totales']['en_cc_moura'] += $row['en_cc_moura'];
             $global['totales']['transferencia_moura'] += $transferenciaMoura;
         }
-
-        $globalBruto = $global['totales']['bruto'];
-        $global['totales']['costo_servicio'] = $globalBruto * 0.03;
-        $global['totales']['iva'] = $global['totales']['costo_servicio'] * 0.21;
-        $global['totales']['beneficio_credmoura'] = $globalBruto * 0.005;
 
         return [
             'global' => $global,

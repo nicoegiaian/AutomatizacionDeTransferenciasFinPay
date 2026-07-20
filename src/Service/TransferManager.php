@@ -931,10 +931,11 @@ class TransferManager
         $montoPdv = (float)($dataPdv['monto_pdv'] ?? 0);
         
         // 3. Obtener montos y detalle reales Fabricante (procesados) por unidad.
-        // Prioriza el campo precomputado en CAC y conserva fallback legacy para datos históricos.
+        // Prioriza el campo precomputado en CAC y, si viene en 0, usa fallback legacy
+        // para filas históricas o sin recálculo.
         $sqlFab = "SELECT 
                 u.nombre as nombre_unidad,
-                ROUND(SUM(IFNULL(cac.transferencia_moura_visible,
+            ROUND(SUM(COALESCE(NULLIF(cac.transferencia_moura_visible, 0),
                     (cac.totalneto * (100 - splits.porcentajepdv) / 100)
                     - IFNULL(cac.comision_moura, 0)
                     - GREATEST(0, IFNULL(cac.beneficiocredmoura, 0) - cac.importecheque * 0.002)
