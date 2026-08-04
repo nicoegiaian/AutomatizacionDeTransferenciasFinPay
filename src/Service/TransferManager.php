@@ -105,12 +105,18 @@ class TransferManager
         }
 
         try {
+            // Regla 12 cuotas: para UN se registra adelanto contable y no se transfiere dinero.
+            if ($this->enableRealTransfer) {
+                $adelantosContables = $this->markFabricanteAsAccountingAdvance($fechaSQL);
+                if ($adelantosContables > 0) {
+                    $this->logger->info("🧾 Regla 12 cuotas aplicada: {$adelantosContables} transacciones marcadas como adelanto contable UN.");
+                }
+            } else {
+                $this->logger->info("🧪 DRY RUN: no se aplica marcado contable de 12 cuotas (sin cambios persistentes).");
+            }
+
             // 2. Cálculo de Montos
             $data = $this->getPendingTransfersData($fechaSQL);
-            $contablesMarcadas = $this->markFabricanteAsAccountingAdvance($fechaSQL);
-            if ($contablesMarcadas > 0) {
-                $this->logger->info("🧾 Adelanto UN contable: {$contablesMarcadas} transacciones marcadas sin transferencia de dinero.");
-            }
             
             // Si no hay nada pendiente, devolvemos las transferencias ya completadas
             if ($data['total_monto'] <= 0) {
@@ -567,24 +573,55 @@ class TransferManager
         ";
         $dataPdv = $this->dbConnection->executeQuery($queryPdv, ['fecha' => $fechaSQL])->fetchAssociative();
 
-                // 2. FABRICANTE (UN): en adelanto NO se transfiere dinero a UN.
-                // Se mantiene únicamente el flujo de recupero_financiacion.
-                $unidadesFabricante = [];
+                // 2. FABRICANTE (UN): cálculo original + recupero de financiación.
+                $queryFab = "SELECT 
+                                u.id as id_unidad,
+                                u.nombre as nombre_unidad,
+                                u.cbu as cbu_unidad,
+                                u.cuit as cuit_unidad,
+                                GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv, 
+                                ROUND(
+                                        SUM(cac.totalneto * (100 - splits.porcentajepdv) / 100)
+                                        - SUM(IFNULL(cac.comision_moura, 0))
+                                        - SUM(GREATEST(0, IFNULL(cac.beneficiocredmoura, 0) - cac.importecheque * 0.002))
+                                        - SUM(IFNULL(cac.aranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)
+                                        - SUM(IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)
+                                , 2) AS monto_calculado
+                        FROM transacciones t
+                        INNER JOIN calculos_ahorro_credmoura cac ON t.nrotransaccion = cac.nrotransaccion
+                        INNER JOIN puntosdeventa p ON t.idpdv = p.id
+                        INNER JOIN unidadesdenegocio u ON p.idunidadnegocio = u.id
+                        INNER JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
+                        INNER JOIN splits ON splits.idpdv = t.idpdv
+                            AND splits.fecha = (
+                                SELECT MAX(s2.fecha) FROM splits s2 
+                                WHERE s2.idpdv = t.idpdv AND s2.fecha < t.fecha 
+                                AND s2.estatus_aprobacion = 'Aprobado' AND s2.borrado_en IS NULL
+                            )
+                        WHERE DATE(t.fechapagobind) = :fecha
+                        AND t.transferencia_fabricante_procesada = 0
+                        AND CAST(IFNULL(t.canal, 0) AS UNSIGNED) <> 12
+                        GROUP BY u.id, u.nombre, u.cbu, u.cuit
+                ";
+
+                $unidadesFabricante = $this->dbConnection
+                        ->executeQuery($queryFab, ['fecha' => $fechaSQL])
+                        ->fetchAllAssociative();
 
         $queryRecuperoFinanciacion = "SELECT 
                 u.id as id_unidad,
                 u.nombre as nombre_unidad,
-                u.cbu as cbu_unidad,
+            COALESCE(NULLIF(u.cbu_12_cuotas, ''), u.cbu) as cbu_unidad,
                 u.cuit as cuit_unidad,
                 GROUP_CONCAT(cf.id) AS cuota_ids_csv,
                 ROUND(SUM(cf.monto_neto_cuota), 2) AS monto_recupero_financiacion
             FROM cuotas_financiacion cf
             INNER JOIN financiacion_12cuotas f ON f.id = cf.id_financiacion
-            INNER JOIN unidadesdenegocio u ON u.id = cf.id_unidad_financiadora
+                        INNER JOIN unidadesdenegocio u ON u.id = f.id_unidad_negocio
             WHERE cf.fecha_vencimiento = :fecha
               AND cf.estado IN ('Pendiente', 'Vencida')
               AND f.estado = 'Activo'
-            GROUP BY u.id, u.nombre, u.cbu, u.cuit";
+            GROUP BY u.id, u.nombre, COALESCE(NULLIF(u.cbu_12_cuotas, ''), u.cbu), u.cuit";
         $recuperosFinanciacion = $this->dbConnection
             ->executeQuery($queryRecuperoFinanciacion, ['fecha' => $fechaSQL])
             ->fetchAllAssociative();
@@ -594,6 +631,7 @@ class TransferManager
             $key = (string)$unidad['id_unidad'];
             $unidad['cuota_ids_csv'] = '';
             $unidad['monto_recupero_financiacion'] = 0.0;
+            $unidad['monto_calculado'] = (float)($unidad['monto_calculado'] ?? 0);
             $unidadesFabricanteMap[$key] = $unidad;
         }
 
@@ -964,7 +1002,7 @@ class TransferManager
                 ROUND(SUM(cf.monto_neto_cuota), 2) AS monto_calculado
             FROM cuotas_financiacion cf
             INNER JOIN financiacion_12cuotas f ON f.id = cf.id_financiacion
-            INNER JOIN unidadesdenegocio u ON u.id = cf.id_unidad_financiadora
+                        INNER JOIN unidadesdenegocio u ON u.id = f.id_unidad_negocio
             WHERE cf.fecha_cobro = :fecha
               AND cf.estado = 'Cobrada'
               AND f.estado IN ('Activo', 'Completado')
@@ -1112,15 +1150,15 @@ class TransferManager
             SELECT 
                 u.id as id_unidad,
                 u.nombre as nombre_unidad,
-                u.cbu as cbu_unidad,
+                COALESCE(NULLIF(u.cbu_12_cuotas, ''), u.cbu) as cbu_unidad,
                 ROUND(SUM(cf.monto_neto_cuota), 2) AS monto_recupero_financiacion
             FROM cuotas_financiacion cf
             INNER JOIN financiacion_12cuotas f ON f.id = cf.id_financiacion
-            INNER JOIN unidadesdenegocio u ON u.id = cf.id_unidad_financiadora
+            INNER JOIN unidadesdenegocio u ON u.id = f.id_unidad_negocio
             WHERE cf.fecha_cobro = :fecha
               AND cf.estado = 'Cobrada'
               AND f.estado IN ('Activo', 'Completado')
-            GROUP BY u.id, u.nombre, u.cbu
+            GROUP BY u.id, u.nombre, COALESCE(NULLIF(u.cbu_12_cuotas, ''), u.cbu)
         ";
         $recuperosCompletados = $this->dbConnection->executeQuery($queryRecuperoCompleto, ['fecha' => $fechaSQL])->fetchAllAssociative();
 
