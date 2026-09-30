@@ -59,7 +59,7 @@ class MonthlySettlementService
                 + IFNULL(ld.IVAcostomipyme, 0)
             ) - LEAST(IFNULL(cac.iva_arancel, 0), IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)) as 'iva',
             SUM(IFNULL(cac.otros_impuestos, IFNULL(ld.sirtac, 0) + IFNULL(ld.otrosimpuestos, 0))) as 'otros_impuestos',
-            SUM(GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)) as 'beneficio_credmoura',
+            SUM(GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002 * CASE WHEN t.fecha >= '2026-09-03' THEN (1 - IFNULL(cac.pct_financiacion_arancel, 0) / 100) ELSE 1 END), 0)) as 'beneficio_credmoura',
             SUM(cac.totalneto) as 'total_neto',
             SUM(ROUND((
                 cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100
@@ -206,18 +206,18 @@ class MonthlySettlementService
                     + IFNULL(ld.ivaaranceltarjeta, 0)
                     + IFNULL(ld.IVAcostomipyme, 0)
                 ) - LEAST(IFNULL(cac.iva_arancel, 0), IFNULL(ld.ivaaranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)) as 'iva',
-                SUM(GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)) as 'beneficio_credmoura',
+                SUM(GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002 * CASE WHEN t.fecha >= '2026-09-03' THEN (1 - IFNULL(cac.pct_financiacion_arancel, 0) / 100) ELSE 1 END), 0)) as 'beneficio_credmoura',
                 SUM(cac.totalneto) as 'neto_percibido',
                 SUM(ROUND((cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', 1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cuenta_comercio',
                 SUM(ROUND((cac.totalneto * CAST(SUBSTRING_INDEX(estadocheque, '-', -1) AS DECIMAL(5,2)) / 100), 2)) as 'en_cc_moura',
                 SUM(CASE
                     WHEN CAST(IFNULL(t.Canal, 0) AS UNSIGNED) = 12
                     THEN (IFNULL(cac.comision_moura, 0) / 1.21)
-                        + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)
+                        + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002 * CASE WHEN t.fecha >= '2026-09-03' THEN (1 - IFNULL(cac.pct_financiacion_arancel, 0) / 100) ELSE 1 END), 0)
                     WHEN IFNULL(cac.comision_moura_sin_iva, 0) = 0 AND IFNULL(cac.comision_moura, 0) = 0
                     THEN IFNULL(ld.subsidiomoura, 0)
                     ELSE (IFNULL(cac.comision_moura, 0) / 1.21)
-                        + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)
+                        + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002 * CASE WHEN t.fecha >= '2026-09-03' THEN (1 - IFNULL(cac.pct_financiacion_arancel, 0) / 100) ELSE 1 END), 0)
                 END) as 'total_subsidio',
                 SUM(CASE
                     WHEN IFNULL(cac.comision_moura_sin_iva, 0) = 0 AND IFNULL(cac.comision_moura, 0) = 0
@@ -231,12 +231,12 @@ class MonthlySettlementService
                     - (CASE
                         WHEN CAST(IFNULL(t.Canal, 0) AS UNSIGNED) = 12
                         THEN (IFNULL(cac.comision_moura, 0) / 1.21)
-                            + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)
+                            + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002 * CASE WHEN t.fecha >= '2026-09-03' THEN (1 - IFNULL(cac.pct_financiacion_arancel, 0) / 100) ELSE 1 END), 0)
                             + ((IFNULL(cac.comision_moura, 0) / 1.21) * 0.21)
                         WHEN IFNULL(cac.comision_moura, 0) = 0
                         THEN IFNULL(ld.ivasubsidiomoura, 0) + IFNULL(ld.subsidiomoura, 0)
                         ELSE (IFNULL(cac.comision_moura, 0) / 1.21)
-                            + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002), 0)
+                            + GREATEST(IFNULL(cac.beneficiocredmoura, 0) - (IFNULL(t.importecheque, 0) * 0.002 * CASE WHEN t.fecha >= '2026-09-03' THEN (1 - IFNULL(cac.pct_financiacion_arancel, 0) / 100) ELSE 1 END), 0)
                             + ((IFNULL(cac.comision_moura, 0) / 1.21) * 0.21)
                     END)
                     - (IFNULL(cac.aranceltarjeta, 0) * IFNULL(cac.pct_financiacion_arancel, 0) / 100)
