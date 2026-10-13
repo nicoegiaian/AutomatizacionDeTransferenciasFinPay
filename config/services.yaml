@@ -72,6 +72,8 @@ services:
             $cvuOrigen: '%env(MUTE_CVU_ORIGEN)%'
             $cvuTercero: '%env(MUTE_CVU_TERCERO)%'
             $cvuPagosDigitales: '%env(MUTE_CVU_PAGOSDIGITALES)%'
+            $cuitTercero: '%env(MUTE_CUIT_TERCERO)%'
+            $cuitPagosDigitales: '%env(MUTE_CUIT_PAGOSDIGITALES)%'
             $comisionPorcentaje: '%env(float:MUTE_COMISION_PORCENTAJE)%'
             $ivaPorcentaje: '%env(float:MUTE_IVA_PORCENTAJE)%'
             $emailDestino: '%env(MUTE_EMAIL_DESTINO)%'

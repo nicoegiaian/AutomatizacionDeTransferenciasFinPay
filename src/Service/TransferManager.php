@@ -773,39 +773,53 @@ class TransferManager
             "SELECT f.id, (f.monto_asignado{$interesesSql} - f.monto_consumido) AS monto_disponible
                FROM fondos_adelanto f
               WHERE f.estado = 'Activo'
-              ORDER BY f.anio DESC, f.mes DESC, f.id DESC",
+              ORDER BY f.anio ASC, f.mes ASC, f.id ASC",
             [],
             []
         );
 
+        return $this->asignarAdelantosAFondos($adelantos, $fondos);
+    }
+
+    private function asignarAdelantosAFondos(array $adelantos, array $fondos): array
+    {
         usort($adelantos, static function (array $left, array $right): int {
             return (float)$right['monto_adelanto_pdv'] <=> (float)$left['monto_adelanto_pdv'];
         });
 
         $asignaciones = [];
         foreach ($adelantos as $adelanto) {
-            $montoAdelanto = (float)$adelanto['monto_adelanto_pdv'];
-            $fondoSeleccionado = null;
+            $restanteCentavos = (int)round((float)$adelanto['monto_adelanto_pdv'] * 100);
+            $asignacionFondos = [];
 
             foreach ($fondos as $indice => $fondo) {
-                if ((float)$fondo['monto_disponible'] + 0.00001 < $montoAdelanto) {
+                $disponibleCentavos = max(0, (int)round((float)$fondo['monto_disponible'] * 100));
+                if ($disponibleCentavos === 0 || $restanteCentavos === 0) {
                     continue;
                 }
 
-                $fondoSeleccionado = $indice;
-                break;
+                $asignadoCentavos = min($restanteCentavos, $disponibleCentavos);
+                $fondoId = (int)$fondos[$indice]['id'];
+                $asignacionFondos[$fondoId] = round($asignadoCentavos / 100, 2);
+                $fondos[$indice]['monto_disponible'] = round(
+                    ($disponibleCentavos - $asignadoCentavos) / 100,
+                    2
+                );
+                $restanteCentavos -= $asignadoCentavos;
             }
 
-            if ($fondoSeleccionado === null) {
-                throw new \RuntimeException('Los fondos activos no tienen saldo suficiente para cubrir individualmente los adelantos de 12 cuotas al PDV.');
+            if ($restanteCentavos > 0) {
+                throw new \RuntimeException(sprintf(
+                    'Faltan $%s en fondos activos para cubrir el adelanto de 12 cuotas de la transaccion %s.',
+                    number_format($restanteCentavos / 100, 2, ',', '.'),
+                    $adelanto['nrotransaccion']
+                ));
             }
 
-            $fondoId = (int)$fondos[$fondoSeleccionado]['id'];
-            $fondos[$fondoSeleccionado]['monto_disponible'] = round(
-                (float)$fondos[$fondoSeleccionado]['monto_disponible'] - $montoAdelanto,
-                2
-            );
-            $asignaciones[$fondoId][] = (int)$adelanto['nrotransaccion'];
+            $asignaciones[(string)$adelanto['nrotransaccion']] = [
+                'adelanto' => $adelanto,
+                'fondos' => $asignacionFondos,
+            ];
         }
 
         return $asignaciones;
@@ -817,6 +831,25 @@ class TransferManager
             return;
         }
 
+        $montosPorFondo = [];
+        foreach ($asignaciones as $asignacion) {
+            $adelanto = $asignacion['adelanto'];
+            $montoAsignado = 0;
+            foreach ($asignacion['fondos'] as $idFondo => $monto) {
+                $montoCentavos = (int)round((float)$monto * 100);
+                if ($montoCentavos <= 0) {
+                    throw new \RuntimeException('La asignacion de un adelanto contiene un tramo de fondo invalido.');
+                }
+                $montoAsignado += $montoCentavos;
+                $montosPorFondo[(int)$idFondo] = ($montosPorFondo[(int)$idFondo] ?? 0) + $montoCentavos;
+            }
+
+            $montoEsperado = (int)round((float)$adelanto['monto_adelanto_pdv'] * 100);
+            if ($montoAsignado !== $montoEsperado) {
+                throw new \RuntimeException("La asignacion de fondos no coincide con el adelanto de {$adelanto['nrotransaccion']}.");
+            }
+        }
+
         $this->dbConnection->beginTransaction();
         try {
             $incluyeIntereses = $this->existeTabla('intereses_fondos_adelanto');
@@ -824,12 +857,8 @@ class TransferManager
                 ? ' + COALESCE((SELECT SUM(i.monto) FROM intereses_fondos_adelanto i WHERE i.id_fondo = f.id), 0)'
                 : '';
 
-            foreach ($asignaciones as $idFondo => $transaccionIds) {
-                $adelantos = $this->obtenerAdelantosPendientes12Cuotas($transaccionIds);
-                if (empty($adelantos)) {
-                    continue;
-                }
-
+            ksort($montosPorFondo, SORT_NUMERIC);
+            foreach ($montosPorFondo as $idFondo => $montoRequeridoCentavos) {
                 $fondo = $this->dbConnection->fetchAssociative(
                     "SELECT f.id, (f.monto_asignado{$interesesSql} - f.monto_consumido) AS monto_disponible
                        FROM fondos_adelanto f
@@ -837,51 +866,68 @@ class TransferManager
                       FOR UPDATE",
                     ['id' => $idFondo]
                 );
-                $montoRequerido = array_sum(array_column($adelantos, 'monto_adelanto_pdv'));
-                if (!$fondo || (float)$fondo['monto_disponible'] + 0.00001 < $montoRequerido) {
+                if (!$fondo || (int)round((float)$fondo['monto_disponible'] * 100) < $montoRequeridoCentavos) {
                     throw new \RuntimeException('El saldo del fondo cambió antes de registrar el consumo de adelantos de 12 cuotas.');
                 }
+            }
 
-                $consumoRegistrado = 0.0;
-                foreach ($adelantos as $adelanto) {
-                    $insertados = $this->dbConnection->executeStatement(
-                        'INSERT IGNORE INTO adelantos_liquidacion (
-                            nrotransaccion, idpdv, id_fondo, monto_venta, monto_neto,
-                            monto_adelanto_pdv, porcentaje_split, fecha_venta,
-                            fecha_liquidacion_original, fecha_liquidacion_adelantada,
-                            estado, fecha_liquidacion_efectiva
-                        ) VALUES (
-                            :nrotransaccion, :idpdv, :id_fondo, :monto_venta, :monto_neto,
-                            :monto_adelanto_pdv, :porcentaje_split, :fecha_venta,
-                            :fecha_liquidacion, :fecha_liquidacion,
-                            :estado, NOW()
-                        )',
-                        [
-                            'nrotransaccion' => $adelanto['nrotransaccion'],
-                            'idpdv' => $adelanto['idpdv'],
-                            'id_fondo' => $idFondo,
-                            'monto_venta' => $adelanto['monto_venta'],
-                            'monto_neto' => $adelanto['monto_neto'],
-                            'monto_adelanto_pdv' => $adelanto['monto_adelanto_pdv'],
-                            'porcentaje_split' => $adelanto['porcentaje_split'],
-                            'fecha_venta' => $adelanto['fecha_venta'],
-                            'fecha_liquidacion' => $adelanto['fecha_liquidacion'],
-                            'estado' => 'Liquidado',
-                        ]
-                    );
-                    if ($insertados === 1) {
-                        $consumoRegistrado += (float)$adelanto['monto_adelanto_pdv'];
-                    }
+            $insertCabeceraSql = 'INSERT IGNORE INTO adelantos_liquidacion (
+                    nrotransaccion, idpdv, id_fondo, monto_venta, monto_neto,
+                    monto_adelanto_pdv, porcentaje_split, fecha_venta,
+                    fecha_liquidacion_original, fecha_liquidacion_adelantada,
+                    estado, fecha_liquidacion_efectiva
+                ) VALUES (
+                    :nrotransaccion, :idpdv, :id_fondo, :monto_venta, :monto_neto,
+                    :monto_adelanto_pdv, :porcentaje_split, :fecha_venta,
+                    :fecha_liquidacion, :fecha_liquidacion,
+                    :estado, NOW()
+                )';
+            $insertDetalleSql = 'INSERT INTO adelantos_liquidacion_fondos (id_adelanto, id_fondo, monto_consumido)
+                VALUES (:id_adelanto, :id_fondo, :monto_consumido)';
+            $consumosRegistrados = [];
+
+            foreach ($asignaciones as $asignacion) {
+                $adelanto = $asignacion['adelanto'];
+                $idFondoPrincipal = (int)array_key_first($asignacion['fondos']);
+                $insertados = $this->dbConnection->executeStatement($insertCabeceraSql, [
+                    'nrotransaccion' => $adelanto['nrotransaccion'],
+                    'idpdv' => $adelanto['idpdv'],
+                    'id_fondo' => $idFondoPrincipal,
+                    'monto_venta' => $adelanto['monto_venta'],
+                    'monto_neto' => $adelanto['monto_neto'],
+                    'monto_adelanto_pdv' => $adelanto['monto_adelanto_pdv'],
+                    'porcentaje_split' => $adelanto['porcentaje_split'],
+                    'fecha_venta' => $adelanto['fecha_venta'],
+                    'fecha_liquidacion' => $adelanto['fecha_liquidacion'],
+                    'estado' => 'Liquidado',
+                ]);
+
+                if ($insertados !== 1) {
+                    continue;
                 }
 
-                if ($consumoRegistrado > 0) {
-                    $this->dbConnection->executeStatement(
-                        'UPDATE fondos_adelanto
-                            SET monto_consumido = monto_consumido + :monto
-                          WHERE id = :id',
-                        ['monto' => round($consumoRegistrado, 2), 'id' => $idFondo]
-                    );
+                $idAdelanto = (int)$this->dbConnection->fetchOne(
+                    'SELECT id FROM adelantos_liquidacion WHERE nrotransaccion = :nrotransaccion',
+                    ['nrotransaccion' => $adelanto['nrotransaccion']]
+                );
+                foreach ($asignacion['fondos'] as $idFondo => $monto) {
+                    $monto = round((float)$monto, 2);
+                    $this->dbConnection->executeStatement($insertDetalleSql, [
+                        'id_adelanto' => $idAdelanto,
+                        'id_fondo' => (int)$idFondo,
+                        'monto_consumido' => $monto,
+                    ]);
+                    $consumosRegistrados[(int)$idFondo] = ($consumosRegistrados[(int)$idFondo] ?? 0) + (int)round($monto * 100);
                 }
+            }
+
+            foreach ($consumosRegistrados as $idFondo => $montoCentavos) {
+                $this->dbConnection->executeStatement(
+                    'UPDATE fondos_adelanto
+                        SET monto_consumido = monto_consumido + :monto
+                      WHERE id = :id',
+                    ['monto' => round($montoCentavos / 100, 2), 'id' => $idFondo]
+                );
             }
 
             $this->dbConnection->commit();

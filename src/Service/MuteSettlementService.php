@@ -19,6 +19,8 @@ class MuteSettlementService
     private string $cvuOrigen;
     private string $cvuTercero;
     private string $cvuPagosDigitales;
+    private string $cuitTercero;
+    private string $cuitPagosDigitales;
     private float $comisionPorcentaje;
     private float $ivaPorcentaje;
     private string $emailDestino;
@@ -35,6 +37,8 @@ class MuteSettlementService
         string $cvuOrigen,
         string $cvuTercero,
         string $cvuPagosDigitales,
+        string $cuitTercero,
+        string $cuitPagosDigitales,
         float $comisionPorcentaje,
         float $ivaPorcentaje,
         string $emailDestino,
@@ -50,6 +54,8 @@ class MuteSettlementService
         $this->cvuOrigen = $cvuOrigen;
         $this->cvuTercero = $cvuTercero;
         $this->cvuPagosDigitales = $cvuPagosDigitales;
+        $this->cuitTercero = $cuitTercero;
+        $this->cuitPagosDigitales = $cuitPagosDigitales;
         $this->comisionPorcentaje = $comisionPorcentaje;
         $this->ivaPorcentaje = $ivaPorcentaje;
         $this->emailDestino = $emailDestino;
@@ -115,7 +121,8 @@ class MuteSettlementService
                     $this->cvuTercero, 
                     $paraTercero, 
                     $this->cvuOrigen,
-                    $this->enableRealTransfer // <--- Aquí la magia
+                    $this->enableRealTransfer, // <--- Aquí la magia
+                    $this->cuitTercero // cuit_destino obligatorio en BIND desde 28/04/2026
                 );
                 $this->jsonLogger->info("RESPUESTA TERCERO:", [
                     'monto' => $paraTercero,
@@ -145,7 +152,8 @@ class MuteSettlementService
                     $this->cvuPagosDigitales, 
                     $paraPD, 
                     $this->cvuOrigen,
-                    $this->enableRealTransfer // <--- Flag local
+                    $this->enableRealTransfer, // <--- Flag local
+                    $this->cuitPagosDigitales
                 );
                 
                 $this->jsonLogger->info("RESPUESTA PD:", [
