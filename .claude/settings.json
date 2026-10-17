@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m graphify hook-guard search 2>/dev/null || true",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m graphify hook-guard read 2>/dev/null || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

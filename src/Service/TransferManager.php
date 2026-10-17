@@ -11,6 +11,11 @@ use Psr\Log\LoggerInterface;
 
 class TransferManager
 {
+    // Tras un error de comunicación con BIND se busca la transferencia en sus movimientos:
+    // BIND puede confirmarla minutos después de nuestro timeout (16/10/2026: ~2 minutos).
+    private const VERIFICACION_BIND_INTENTOS = 4;
+    private const VERIFICACION_BIND_ESPERA_SEGUNDOS = 30;
+
     private BindServiceInterface $bindService;
     private Notifier $notifier;
     private Connection $dbConnection;
@@ -114,6 +119,9 @@ class TransferManager
             } else {
                 $this->logger->info("🧪 DRY RUN: no se aplica marcado contable de 12 cuotas (sin cambios persistentes).");
             }
+
+            // Ventas devueltas o con contracargo: no se pagan (quedan fuera de los montos de abajo).
+            $this->registrarVentasBloqueadasPorReversa($fechaSQL);
 
             // 2. Cálculo de Montos
             $data = $this->getPendingTransfersData($fechaSQL);
@@ -312,6 +320,25 @@ class TransferManager
 
 
                     } catch (\Exception $e) {
+                        // Si BIND no respondió a tiempo, la transferencia pudo haber salido igual.
+                        $movConfirmado = $this->buscarTransferenciaTrasError($e, $pdv['cbu'], $pdv['monto'], $fechaSQL);
+                        if ($movConfirmado !== null) {
+                            $bindIdConfirmado = (string)($movConfirmado['idOperacion'] ?? 'ENCONTRADO');
+                            $this->updateTransactionStatus(
+                                $pdv['transacciones_ids'],
+                                'COMPLETADA',
+                                $bindIdConfirmado,
+                                $movConfirmado['coelsaId'] ?? null,
+                                true,
+                                'Confirmada en BIND tras error: ' . $e->getMessage()
+                            );
+                            $this->registrarConsumoFondo12Cuotas($fondosConsumoAsignados ?? []);
+                            $detallePdv['estado'] = 'ENVIADA (CONFIRMADA EN BIND)';
+                            $this->logDetallado("ÉXITO REAL PDV-$razonSocial", "Confirmada en BIND tras error de comunicación. ID Bind: $bindIdConfirmado\nError original: " . $e->getMessage());
+                            $agrupadorPorUnidad[$nombreUnidad]['pdvs'][] = $detallePdv;
+                            continue;
+                        }
+
                         // ERRORES REALES DE API
                         $this->jsonLogger->error("FALLO PDV ({$razonSocial}): " . $e->getMessage());
                         $erroresPdv++;
@@ -500,6 +527,29 @@ class TransferManager
                         $detalleFab['estado'] = 'SIMULADA (DRY RUN)';
                         $detalleMouraLog[$nombreUnidad] = 'DRY_RUN_OK';
                     } catch (\Exception $e) {
+                        // Si BIND no respondió a tiempo, la transferencia pudo haber salido igual.
+                        $movConfirmadoFab = $this->buscarTransferenciaTrasError($e, $cbuUnidad, $montoUnidad, $fechaSQL);
+                        if ($movConfirmadoFab !== null) {
+                            $bindIdConfirmado = (string)($movConfirmadoFab['idOperacion'] ?? 'ENCONTRADO');
+                            $this->updateFabricanteStatus(
+                                $unidad['transacciones_ids_csv'] ?? '',
+                                'COMPLETADA',
+                                $bindIdConfirmado,
+                                $movConfirmadoFab['coelsaId'] ?? null,
+                                'Confirmada en BIND tras error: ' . $e->getMessage()
+                            );
+                            $this->updateFinancingInstallmentsStatus(
+                                $unidad['cuota_ids_csv'] ?? '',
+                                'Cobrada',
+                                $fechaSQL
+                            );
+                            $detalleFab['estado'] = 'ENVIADA (CONFIRMADA EN BIND)';
+                            $detalleMouraLog[$nombreUnidad] = 'OK';
+                            $this->logDetallado("ÉXITO REAL FAB-$nombreUnidad", "Confirmada en BIND tras error de comunicación. ID BIND: $bindIdConfirmado\nError original: " . $e->getMessage());
+                            $agrupadorPorUnidad[$nombreUnidad]['moura'] = $detalleFab;
+                            continue;
+                        }
+
                         // --- CASO ERROR DE API ---
                         $this->jsonLogger->error("FALLO FABRICANTE ({$nombreUnidad}): " . $e->getMessage());
                         $erroresMoura++;
@@ -579,6 +629,7 @@ class TransferManager
               )
             WHERE DATE(t.fechapagobind) = :fecha
             AND t.transferencia_procesada = 0
+            " . $this->sqlSinReversa('t') . "
         ";
         $dataPdv = $this->dbConnection->executeQuery($queryPdv, ['fecha' => $fechaSQL])->fetchAssociative();
 
@@ -610,6 +661,7 @@ class TransferManager
                         WHERE DATE(t.fechapagobind) = :fecha
                         AND t.transferencia_fabricante_procesada = 0
                         AND CAST(IFNULL(t.canal, 0) AS UNSIGNED) <> 12
+                        " . $this->sqlSinReversa('t') . "
                         GROUP BY u.id, u.nombre, u.cbu, u.cuit
                 ";
 
@@ -735,6 +787,7 @@ class TransferManager
               )
             WHERE DATE(t.fechapagobind) = :fecha
             AND t.transferencia_procesada = 0
+            " . $this->sqlSinReversa('t') . "
             GROUP BY p.id, p.razonsocial, p.cbu, p.cuit, u.nombre
         ";
 
@@ -769,11 +822,13 @@ class TransferManager
         $interesesSql = $incluyeIntereses
             ? ' + COALESCE((SELECT SUM(i.monto) FROM intereses_fondos_adelanto i WHERE i.id_fondo = f.id), 0)'
             : '';
+        // Los fondos activos se suman y se consumen desde la fecha en que Moura
+        // transfirio el fondo mas antiguo; sin fecha se usa el dia 1 del periodo.
         $fondos = $this->dbConnection->fetchAllAssociative(
             "SELECT f.id, (f.monto_asignado{$interesesSql} - f.monto_consumido) AS monto_disponible
                FROM fondos_adelanto f
               WHERE f.estado = 'Activo'
-              ORDER BY f.anio ASC, f.mes ASC, f.id ASC",
+              ORDER BY COALESCE(f.fecha_transferencia, MAKEDATE(f.anio, 1) + INTERVAL (f.mes - 1) MONTH) ASC, f.id ASC",
             [],
             []
         );
@@ -928,6 +983,14 @@ class TransferManager
                       WHERE id = :id',
                     ['monto' => round($montoCentavos / 100, 2), 'id' => $idFondo]
                 );
+                $this->dbConnection->executeStatement(
+                    "UPDATE fondos_adelanto f
+                        SET f.estado = 'Agotado'
+                      WHERE f.id = :id
+                        AND f.estado = 'Activo'
+                        AND (f.monto_asignado{$interesesSql} - f.monto_consumido) <= 0",
+                    ['id' => $idFondo]
+                );
             }
 
             $this->dbConnection->commit();
@@ -989,6 +1052,105 @@ class TransferManager
                   AND transferencia_fabricante_procesada = 0";
 
         return $this->dbConnection->executeStatement($sql, ['fecha' => $fechaSQL]);
+    }
+
+    /**
+     * Condición SQL: la venta no tiene una devolución registrada por la API de Menta ni un
+     * contracargo / devolución cruzado en los archivos de Payway. Un contracargo deja de
+     * bloquear si Payway volvió a presentar la venta después.
+     */
+    private function sqlSinReversa(string $alias): string
+    {
+        return "AND NOT EXISTS (
+                SELECT 1 FROM menta_operaciones_reversas rv
+                 WHERE rv.nrotransaccion_original = {$alias}.nrotransaccion AND rv.tipo = 'REFUND'
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM payway_movimientos_conciliacion cc
+                 WHERE cc.nrotransaccion = {$alias}.nrotransaccion
+                   AND cc.estado_cruce = 'COINCIDE'
+                   AND (cc.tipo_archivo = 'CONTRACARGOS' OR (cc.tipo_archivo = 'PRESENTADAS' AND cc.cod_op = '1507'))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM payway_movimientos_conciliacion rp
+                        WHERE rp.nrotransaccion = cc.nrotransaccion
+                          AND rp.tipo_archivo = 'PRESENTADAS' AND rp.cod_op = '0005'
+                          AND rp.fecha_presentacion > COALESCE(cc.fecha_presentacion, cc.fecha_compra)
+                   )
+            )";
+    }
+
+    /** Marca y deja en el log las ventas de la fecha que no se pagan por devolución o contracargo. */
+    private function registrarVentasBloqueadasPorReversa(string $fechaSQL): void
+    {
+        $bloqueadas = $this->dbConnection->fetchAllAssociative(
+            "SELECT t.nrotransaccion, p.razonsocial, t.importecheque
+               FROM transacciones t
+               JOIN puntosdeventa p ON p.id = t.idpdv
+              WHERE DATE(t.fechapagobind) = :fecha
+                AND (t.transferencia_procesada = 0 OR t.transferencia_fabricante_procesada = 0)
+                AND NOT (1 = 1 " . $this->sqlSinReversa('t') . ")",
+            ['fecha' => $fechaSQL]
+        );
+        if (empty($bloqueadas)) {
+            return;
+        }
+
+        foreach ($bloqueadas as $venta) {
+            $this->logger->warning("    ⛔ Venta {$venta['nrotransaccion']} ({$venta['razonsocial']}, \${$venta['importecheque']}) no se paga: tiene devolución o contracargo.");
+        }
+        $this->logDetallado(
+            'VENTAS BLOQUEADAS POR DEVOLUCIÓN / CONTRACARGO',
+            implode("\n", array_map(static fn(array $v): string => "{$v['nrotransaccion']} - {$v['razonsocial']} - \${$v['importecheque']}", $bloqueadas))
+        );
+        if ($this->enableRealTransfer) {
+            $ids = implode(',', array_map(static fn(array $v): int => (int)$v['nrotransaccion'], $bloqueadas));
+            $this->dbConnection->executeStatement(
+                "UPDATE transacciones SET transferencia_estado = 'BLOQUEADA_REVERSA'
+                  WHERE nrotransaccion IN ($ids) AND transferencia_procesada = 0"
+            );
+        }
+    }
+
+    /**
+     * Ante un error de comunicación al transferir (timeout, red), consulta los movimientos de BIND
+     * para ver si la transferencia salió igual. Devuelve el movimiento encontrado o null.
+     */
+    private function buscarTransferenciaTrasError(\Throwable $error, string $cbuDestino, float $monto, string $fechaSQL): ?array
+    {
+        if (!$this->enableRealTransfer || !$this->esErrorDeComunicacionBind($error)) {
+            return null;
+        }
+
+        $this->logger->warning("    ⏳ Error de comunicación con BIND ({$error->getMessage()}). Verificando si la transferencia a $cbuDestino por \$$monto salió igual...");
+        for ($intento = 1; $intento <= self::VERIFICACION_BIND_INTENTOS; $intento++) {
+            sleep(self::VERIFICACION_BIND_ESPERA_SEGUNDOS);
+            try {
+                $movimiento = $this->bindService->existeTransferenciaPrevia($cbuDestino, $monto, $fechaSQL);
+                if ($movimiento !== null) {
+                    $this->logger->warning("    ✅ Transferencia confirmada en BIND en el intento $intento (ID: " . ($movimiento['idOperacion'] ?? '?') . ").");
+                    return $movimiento;
+                }
+            } catch (\Throwable $consultaError) {
+                $this->logger->warning("    No se pudo consultar BIND (intento $intento): " . $consultaError->getMessage());
+            }
+        }
+
+        $this->logger->error("    ❌ La transferencia a $cbuDestino por \$$monto no aparece en BIND tras " . self::VERIFICACION_BIND_INTENTOS . " consultas.");
+        return null;
+    }
+
+    private function esErrorDeComunicacionBind(\Throwable $error): bool
+    {
+        if ($error instanceof \Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface) {
+            return true;
+        }
+        $mensaje = strtolower($error->getMessage());
+        foreach (['timeout', 'timed out', 'connection', 'could not resolve', 'respuesta está vacía'] as $patron) {
+            if (str_contains($mensaje, $patron)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function updateTransactionStatus(array $transaccionIds, string $estado, string $bindId, ?string $coelsaId = null, bool $marcarProcesada = true, ?string $respuestaBind = null): void

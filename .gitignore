@@ -12,3 +12,10 @@
 /var/
 /vendor/
 ###< symfony/framework-bundle ###
+
+###> editor ###
+.vscode/
+###< editor ###
+
+# graphify (grafo de código local)
+graphify-out/
