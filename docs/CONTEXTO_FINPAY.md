@@ -24,7 +24,7 @@ El cron del host ignora `CRON_TZ`: todos los horarios son UTC (Argentina = UTC�
 | UTC | ART | Proceso | Qué hace |
 |---|---|---|---|
 | 06:00 | 03:00 | `cobrosflex-orquestador-trx` → `app:orquestador_trx` | 1) `procesador_API_Menta.php` (día anterior): ventas de la API; guarda devoluciones/anulaciones en `menta_operaciones_reversas`. 2) `archivosdiarios.php`: recibos TXT y transacciones. 3) `calcular_nuevos_campos.php`. 4) `procesar_financiacion_12cuotas.php`. 5) `liquidaciondiaria.php` (solo días hábiles) |
-| 11:05 y 13:05 | 08:05 y 10:05 | `cobrosflex-payway` → `payway_download.sh` | Baja del SFTP de Payway Presentadas, Liquidadas y Contracargos (incremental; la 2.ª corrida cubre publicaciones tardías). Sincroniza fechas de liquidación, regenera archivos afectados, registra movimientos para conciliación (`conciliar_payway_diaria.php`) y genera descuentos "A revisar" (`generar_descuentos_reversas.php`, pendiente de desplegar) |
+| 11:05 y 13:05 | 08:05 y 10:05 | `cobrosflex-payway` → `payway_download.sh` | Baja del SFTP de Payway Presentadas, Liquidadas y Contracargos (incremental; la 2.ª corrida cubre publicaciones tardías). Sincroniza fechas de liquidación, regenera archivos afectados, registra movimientos para conciliación (`conciliar_payway_diaria.php`) y genera descuentos "A revisar" (`generar_descuentos_reversas.php`) |
 | 13:00 | 10:00 | `cobrosflex-mute-settlement` → `app:mute-settlement` | Liquidación MUTE: reparte el saldo de la cuenta MUTE (90 % del neto al tercero, resto a Pagos Digitales). Requiere CUIT de destino |
 | 12:00 día 1 | 09:00 día 1 | `cobrosflex-mute-monthly-report` | Reporte mensual MUTE |
 | 13:00 día 1 | 10:00 día 1 | `cobrosflex-generate-monthly-reports` | Reportes mensuales Moura (PDF por unidad) |
@@ -75,11 +75,11 @@ Logs: `/var/log/cobrosflex-*.log`, `/var/log/payway_sync.log` y `AutomatizacionD
 - Payway publica los archivos alrededor de las 08:00 ART, a veces más tarde (por eso la segunda corrida a las 10:05).
 - El modo automático de Claude Code bloquea escrituras directas en la base de producción: se preparan los comandos y los corre una persona.
 
-## 6. Pendientes al 16/10/2026
-- Desplegar: migración de descuentos (estado "A revisar"), `generar_descuentos_reversas.php`, bloqueo de pago en `TransferManager`, aprobación en el ABM de descuentos.
-- Desplegar la pantalla de conciliación (`conciliacion_payway.php` + API + JS + feriados + enlace en `navigation.php`) y elegir diseño (temas `?tema=apple` / `?tema=emil`, solo en local).
+## 6. Pendientes al 19/10/2026
+- Desplegado el 19/10 (backup `.deploy_backups/20261019_134543_descuentos_automaticos_conciliacion`): `generar_descuentos_reversas.php` + paso en `payway_download.sh`, bloqueo de pago en `TransferManager`, aprobación en el ABM de descuentos y pantalla de conciliación (tema emil por defecto; `?tema=apple` / `?tema=base`).
+- Falta correr en prod `api/migration_descuentos_automaticos.sql` (estado "A revisar" y columnas `origen`, `aprobado_por`, `aprobado_en`): sin ella falla el generador de descuentos.
+- Revisar el descuento #74 (RepCars, $25.000): la venta 39866582 se devolvió el mismo día y nunca se pagó al PDV.
 - Opción B del TXT de recibos: que `archivosdiarios.php` escriba el total neto canónico.
-- Commitear lo desplegado en Moura-clean (scripts de Payway, reversas) y en los otros repos.
 
 ## 7. Grafo de código (graphify)
 
