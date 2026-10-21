@@ -12,7 +12,7 @@ Para el detalle del código usar el grafo de graphify (ver al final). Actualizad
 | `credimoura_mandala_pagosdigitales` | Portal web (ABMs, reportes, fondos, descuentos, conciliación) | `/opt/cobrosflex/app/portal` | `cobrosflex-web` |
 | ProyectoFinPay | Orquestador diario (`app:orquestador_trx`) | `/opt/cobrosflex/app/ProyectoFinPay` | `cobrosflex-cron` |
 
-- Base de datos: `cobrosflex-db` (MariaDB 10.11), base `u156146850_moura`. En local: Docker de credimoura, MySQL 8, base `localsix`.
+- Base de datos: `cobrosflex-db` (MariaDB 10.11), base `u156146850_moura`. Buffer pool de InnoDB en 1 GB (`--innodb-buffer-pool-size=1G` en `/opt/cobrosflex/docker-compose.yml`, desde el 21/10/2026; con 128 MB la conciliación tardaba ~40 s). `SET GLOBAL` requiere root (`MYSQL_ROOT_PASSWORD` del contenedor). En local: Docker de credimoura, MySQL 8, base `localsix`.
 - Los despliegues son copias de archivos (no hay `git pull` en el VPS). Siempre con backup en `/opt/cobrosflex/app/.deploy_backups/<fecha>_<motivo>/`.
 - SSH: alias `cobrosflex-vps-admin` (usuario `finpayadmin` con sudo). Funciona desde PowerShell (OpenSSH de Windows), no desde Git Bash.
 - El servidor viejo de Hostinger (`prepagasdigitales`) todavía ejecuta algunos crons (workers del portal, restaurantes, prisma sync, getcompanies, BindTransaccionesCron). MUTE, orquestador y reportes ya están solo en el VPS.
